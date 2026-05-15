@@ -22,6 +22,18 @@
             <template #title>好友列表</template>
           </el-menu-item>
 
+          <template v-if="auth.isAdmin">
+            <el-menu-item index="business-agents" :route="{ name: 'business-agents' }">
+              <el-icon><Briefcase /></el-icon>
+              <template #title>商务代理</template>
+            </el-menu-item>
+
+            <el-menu-item index="merchants" :route="{ name: 'merchants' }">
+              <el-icon><Shop /></el-icon>
+              <template #title>商家账号</template>
+            </el-menu-item>
+          </template>
+
           <el-menu-item index="account-groups" :route="{ name: 'account-groups' }">
             <el-icon><Collection /></el-icon>
             <template #title>账号分组</template>
@@ -154,6 +166,7 @@ import {
   Odometer, User, UserFilled, FolderOpened, Promotion,
   Fold, Expand, FullScreen, ArrowDown,
   Collection, Avatar, PieChart, Notebook,
+  Briefcase, Shop,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()

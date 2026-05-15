@@ -6,12 +6,14 @@ from backend.app.api.routes import (
     agents,
     audit,
     auth,
+    business_agents,
     campaigns,
     customers,
     export,
     files,
     materials,
     materials_items,
+    merchants,
     phones,
     phones_items,
     proxies,
@@ -39,4 +41,6 @@ api_router.include_router(phones.router, prefix="/phone-groups", tags=["phone-gr
 api_router.include_router(phones_items.router, prefix="/phones", tags=["phones"])
 api_router.include_router(materials.router, prefix="/material-groups", tags=["material-groups"])
 api_router.include_router(materials_items.router, prefix="/materials", tags=["materials"])
+api_router.include_router(business_agents.router, prefix="/business-agents", tags=["business-agents"])
+api_router.include_router(merchants.router, prefix="/merchants", tags=["merchants"])
 api_router.include_router(ws.router, prefix="/ws", tags=["ws"])

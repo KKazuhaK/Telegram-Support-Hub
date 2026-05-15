@@ -12,6 +12,8 @@ const routes = [
       { path: 'accounts', name: 'accounts', component: () => import('@/views/Accounts.vue'), meta: { title: '账号管理' } },
       { path: 'account-groups', name: 'account-groups', component: () => import('@/views/AccountGroups.vue'), meta: { title: '账号分组' } },
       { path: 'friends', name: 'friends', component: () => import('@/views/Friends.vue'), meta: { title: '好友列表' } },
+      { path: 'business-agents', name: 'business-agents', component: () => import('@/views/BusinessAgents.vue'), meta: { title: '商务代理', adminOnly: true } },
+      { path: 'merchants', name: 'merchants', component: () => import('@/views/Merchants.vue'), meta: { title: '商家账号', adminOnly: true } },
 
       // 任务管理
       { path: 'campaigns', name: 'campaigns', component: () => import('@/views/Campaigns.vue'), meta: { title: '批量群发' } },
