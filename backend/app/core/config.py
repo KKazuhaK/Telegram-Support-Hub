@@ -1,0 +1,58 @@
+import os
+from functools import cached_property
+from pathlib import Path
+
+from dotenv import load_dotenv
+from sqlalchemy.engine import URL
+
+load_dotenv()
+
+
+class Settings:
+    app_env: str = os.getenv("APP_ENV", "development")
+    app_name: str = os.getenv("APP_NAME", "TG Support Hub")
+    app_secret: str = os.getenv("APP_SECRET", "dev-secret")
+    auto_create_tables: bool = os.getenv("AUTO_CREATE_TABLES", "true").lower() == "true"
+
+    mysql_host: str = os.getenv("MYSQL_HOST", "127.0.0.1")
+    mysql_port: int = int(os.getenv("MYSQL_PORT", "3306"))
+    mysql_database: str = os.getenv("MYSQL_DATABASE", "tg_support_hub")
+    mysql_user: str = os.getenv("MYSQL_USER", "root")
+    mysql_password: str = os.getenv("MYSQL_PASSWORD", "")
+
+    redis_host: str = os.getenv("REDIS_HOST", "127.0.0.1")
+    redis_port: int = int(os.getenv("REDIS_PORT", "6379"))
+    redis_password: str = os.getenv("REDIS_PASSWORD", "")
+    redis_db: int = int(os.getenv("REDIS_DB", "0"))
+
+    telegram_api_id: str = os.getenv("TELEGRAM_API_ID", "")
+    telegram_api_hash: str = os.getenv("TELEGRAM_API_HASH", "")
+
+    session_dir: Path = Path(os.getenv("SESSION_DIR", "./data/sessions"))
+    upload_dir: Path = Path(os.getenv("UPLOAD_DIR", "./data/uploads"))
+    log_dir: Path = Path(os.getenv("LOG_DIR", "./data/logs"))
+
+    @cached_property
+    def database_url(self) -> URL:
+        return URL.create(
+            "mysql+pymysql",
+            username=self.mysql_user,
+            password=self.mysql_password,
+            host=self.mysql_host,
+            port=self.mysql_port,
+            database=self.mysql_database,
+            query={"charset": "utf8mb4"},
+        )
+
+    @cached_property
+    def redis_url(self) -> str:
+        auth = f":{self.redis_password}@" if self.redis_password else ""
+        return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    def ensure_directories(self) -> None:
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+
+settings = Settings()

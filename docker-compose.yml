@@ -1,0 +1,46 @@
+services:
+  backend-api:
+    build: .
+    env_file:
+      - .env
+    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  worker-send:
+    build: .
+    env_file:
+      - .env
+    command: celery -A backend.app.workers.celery_app worker -Q send -n send@%h --loglevel=INFO
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  worker-account:
+    build: .
+    env_file:
+      - .env
+    command: celery -A backend.app.workers.celery_app worker -Q account -n account@%h --loglevel=INFO
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  worker-beat:
+    build: .
+    env_file:
+      - .env
+    command: celery -A backend.app.workers.celery_app beat --loglevel=INFO
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
