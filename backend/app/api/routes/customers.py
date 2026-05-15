@@ -18,6 +18,10 @@ class CustomerImport(BaseModel):
     text: str
     source: str | None = None
     assume_consent: bool = False
+    # Optionally distribute the freshly created (consented) rows to accounts
+    # in these groups in the same transaction. None / empty = skip assignment.
+    account_group_ids: list[int] | None = None
+    max_per_account: int | None = None
 
 
 class CustomerAssign(BaseModel):
@@ -60,6 +64,7 @@ def import_customers(payload: CustomerImport, db: DbSession, user: CurrentUserDe
 
     imported, rejected = parse_customer_text(payload.text, payload.source, payload.assume_consent)
     created: list[dict] = []
+    created_ids: list[int] = []
     duplicated: list[str] = []
 
     for item in imported:
@@ -71,11 +76,35 @@ def import_customers(payload: CustomerImport, db: DbSession, user: CurrentUserDe
         db.add(customer)
         db.flush()
         created.append(to_dict(customer))
+        created_ids.append(customer.id)
 
-    write_audit(db, actor=user, action="customer.import",
-                detail={"created": len(created), "duplicated": len(duplicated), "rejected": len(rejected)})
+    assignment = None
+    if payload.account_group_ids and created_ids:
+        scoped_groups = _scope_accounts_to_user(db, user, payload.account_group_ids)
+        assignment = assign_customers(
+            db,
+            customer_ids=created_ids,
+            account_group_ids=scoped_groups,
+            max_per_account=payload.max_per_account,
+            only_unassigned=True,
+        )
+
+    write_audit(
+        db, actor=user, action="customer.import",
+        detail={
+            "created": len(created),
+            "duplicated": len(duplicated),
+            "rejected": len(rejected),
+            "assignment": assignment,
+        },
+    )
     db.commit()
-    return {"created": created, "duplicated": duplicated, "rejected": rejected}
+    return {
+        "created": created,
+        "duplicated": duplicated,
+        "rejected": rejected,
+        "assignment": assignment,
+    }
 
 
 @router.post("/assign")
