@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import delete as sa_delete, func, select
 
 from backend.app.api.deps import AdminDep, CurrentUserDep, DbSession
+from backend.app.api.routes.files import _sanitise
+from backend.app.core.config import settings
 from backend.app.models.data_groups import Material, MaterialGroup
 from backend.app.services.audit import write_audit
 from backend.app.services.serializers import to_dict
@@ -107,3 +109,58 @@ def add_materials(group_id: int, payload: MaterialsAdd, db: DbSession, admin: Ad
                 detail={"created": created})
     db.commit()
     return {"created": created}
+
+
+@router.post("/{group_id}/upload")
+async def upload_material(
+    group_id: int, db: DbSession, admin: AdminDep,
+    file: UploadFile = File(...),
+) -> dict:
+    """Upload an image / voice (non-text) file into a material group.
+
+    The file lands under `<UPLOAD_DIR>/materials/<group_id>/<sanitised>`
+    with a numeric suffix if the name collides. A Material row is
+    created with `file_path` set; `content` mirrors the original filename
+    so the UI has a label to render.
+    """
+    g = db.get(MaterialGroup, group_id)
+    if not g:
+        raise HTTPException(status_code=404, detail="文本分组不存在")
+    if g.kind == "text":
+        raise HTTPException(
+            status_code=400,
+            detail="文本分组不支持文件上传，请改用文本批量新增",
+        )
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="缺少文件名")
+
+    target_dir = settings.upload_dir / "materials" / str(group_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    safe = _sanitise(file.filename)
+    target = target_dir / safe
+    if target.exists():
+        stem, suffix = target.stem, target.suffix
+        for i in range(1, 1000):
+            candidate = target_dir / f"{stem}-{i}{suffix}"
+            if not candidate.exists():
+                target = candidate
+                break
+
+    content = await file.read()
+    target.write_bytes(content)
+
+    material = Material(
+        group_id=group_id,
+        content=file.filename,
+        file_path=str(target),
+    )
+    db.add(material)
+    db.flush()
+    write_audit(
+        db, actor=admin, action="material.upload",
+        target_type="material_group", target_id=group_id,
+        detail={"material_id": material.id, "name": safe, "size": len(content)},
+    )
+    db.commit()
+    db.refresh(material)
+    return to_dict(material)

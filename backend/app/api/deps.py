@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
@@ -46,6 +46,25 @@ def get_current_user(
 
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
+
+
+def get_current_user_flexible(
+    db: DbSession,
+    authorization: str | None = Header(default=None),
+    token: str | None = Query(default=None),
+) -> CurrentUser:
+    """Like `get_current_user` but also accepts the token via ?token=... so
+    browser-rendered <img>/<audio>/<a download> tags that can't add an
+    Authorization header still authenticate. Used by file/material download
+    routes only."""
+    if authorization:
+        return get_current_user(db=db, authorization=authorization)
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="请先登录")
+    return get_current_user(db=db, authorization=f"Bearer {token}")
+
+
+FlexibleUserDep = Annotated[CurrentUser, Depends(get_current_user_flexible)]
 
 
 def require_admin(user: CurrentUserDep) -> CurrentUser:
