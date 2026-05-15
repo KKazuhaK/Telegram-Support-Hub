@@ -1,6 +1,7 @@
-# 用法：当 MariaDB 11.4 和 Redis 7 已经装在宿主机（例如 aaPanel/宝塔）时使用此文件。
-# .env 中将 MYSQL_HOST=host.docker.internal、REDIS_HOST=host.docker.internal。
-# 启动：docker compose -f docker-compose.prod.host-services.yml up -d
+# Use this file when MariaDB 11.4 and Redis 7 are installed on the host
+# (e.g. via aaPanel / baota). Set MYSQL_HOST=host.docker.internal and
+# REDIS_HOST=host.docker.internal in .env.
+# Start: docker compose -f docker-compose.prod.host-services.yml up -d
 services:
   backend-api:
     image: ${APP_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub:latest}
