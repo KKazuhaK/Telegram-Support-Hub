@@ -1,0 +1,76 @@
+# Use this file when you want every container to share the host's network
+# namespace, bypassing docker bridge / iptables entirely. Useful for
+# aaPanel-style hosts where DB and Redis run on the host and the docker
+# bridge is firewalled.
+#
+# Side-effects:
+#   - All container ports become host ports directly. backend-api binds
+#     8000, frontend binds 8080 (overridden via mounted nginx.host.conf),
+#     workers bind nothing.
+#   - .env should set MYSQL_HOST=127.0.0.1 and REDIS_HOST=127.0.0.1.
+#   - You must drop frontend/nginx.host.conf next to .env on the server.
+services:
+  backend-api:
+    image: ${APP_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub:latest}
+    env_file:
+      - .env
+    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+    network_mode: host
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker-send:
+    image: ${APP_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub:latest}
+    env_file:
+      - .env
+    command: celery -A backend.app.workers.celery_app worker -Q send -n send@%h --loglevel=INFO
+    network_mode: host
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  worker-account:
+    image: ${APP_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub:latest}
+    env_file:
+      - .env
+    command: celery -A backend.app.workers.celery_app worker -Q account -n account@%h --loglevel=INFO
+    network_mode: host
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  worker-listen:
+    image: ${APP_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub:latest}
+    env_file:
+      - .env
+    command: python -m backend.app.workers.listen_worker
+    network_mode: host
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  worker-beat:
+    image: ${APP_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub:latest}
+    env_file:
+      - .env
+    command: celery -A backend.app.workers.celery_app beat --loglevel=INFO
+    network_mode: host
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub-frontend:latest}
+    network_mode: host
+    volumes:
+      # Override the baked-in nginx config so it listens on 8080 instead
+      # of 80 (which is occupied by aaPanel's web server).
+      - ./nginx.host.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
