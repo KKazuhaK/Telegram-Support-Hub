@@ -1,0 +1,74 @@
+# 用法：当 MariaDB 11.4 和 Redis 7 已经装在宿主机（例如 aaPanel/宝塔）时使用此文件。
+# .env 中将 MYSQL_HOST=host.docker.internal、REDIS_HOST=host.docker.internal。
+# 启动：docker compose -f docker-compose.prod.host-services.yml up -d
+services:
+  backend-api:
+    image: ${APP_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub:latest}
+    env_file:
+      - .env
+    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker-send:
+    image: ${APP_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub:latest}
+    env_file:
+      - .env
+    command: celery -A backend.app.workers.celery_app worker -Q send -n send@%h --loglevel=INFO
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  worker-account:
+    image: ${APP_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub:latest}
+    env_file:
+      - .env
+    command: celery -A backend.app.workers.celery_app worker -Q account -n account@%h --loglevel=INFO
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  worker-listen:
+    image: ${APP_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub:latest}
+    env_file:
+      - .env
+    command: python -m backend.app.workers.listen_worker
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  worker-beat:
+    image: ${APP_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub:latest}
+    env_file:
+      - .env
+    command: celery -A backend.app.workers.celery_app beat --loglevel=INFO
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/kkazuhak/telegram-support-hub-frontend:latest}
+    depends_on:
+      - backend-api
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    restart: unless-stopped
