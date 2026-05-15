@@ -23,6 +23,10 @@ class AccountUpdate(BaseModel):
     status: str | None = None
     daily_limit: int | None = None
     phone: str | None = None
+    nickname: str | None = None
+    country: str | None = None
+    remark: str | None = None
+    avatar_status: str | None = None
 
 
 class AccountProxyBind(BaseModel):
@@ -38,6 +42,13 @@ class AccountBatch(BaseModel):
     ids: list[int] = Field(min_length=1)
     enabled: bool | None = None
     status: str | None = None
+    # Bulk-bind / unbind proxy. proxy_id=null + clear_proxy=true → unbind.
+    proxy_id: int | None = None
+    clear_proxy: bool = False
+    # Move accounts to a new primary group (removes all existing primary
+    # memberships for those accounts and inserts one new is_primary=True
+    # row per account in the target group).
+    move_to_group_id: int | None = None
 
 
 class AccountBatchDelete(BaseModel):
@@ -87,6 +98,13 @@ def list_accounts(
     enabled: bool | None = None,
     phone: str | None = None,
     group_id: int | None = None,
+    nickname: str | None = None,
+    country: str | None = None,
+    avatar_status: str | None = None,
+    has_proxy: bool | None = None,
+    remark: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict]:
@@ -98,6 +116,22 @@ def list_accounts(
         stmt = stmt.where(Account.enabled.is_(enabled))
     if phone:
         stmt = stmt.where(Account.phone.like(f"%{phone}%"))
+    if nickname:
+        stmt = stmt.where(Account.nickname.like(f"%{nickname}%"))
+    if country:
+        stmt = stmt.where(Account.country == country)
+    if avatar_status:
+        stmt = stmt.where(Account.avatar_status == avatar_status)
+    if remark:
+        stmt = stmt.where(Account.remark.like(f"%{remark}%"))
+    if has_proxy is True:
+        stmt = stmt.where(Account.proxy_id.isnot(None))
+    elif has_proxy is False:
+        stmt = stmt.where(Account.proxy_id.is_(None))
+    if from_date:
+        stmt = stmt.where(Account.last_login_at >= from_date)
+    if to_date:
+        stmt = stmt.where(Account.last_login_at < f"{to_date}T23:59:60")
     if group_id:
         stmt = stmt.where(Account.id.in_(
             select(AccountGroupMember.account_id).where(AccountGroupMember.group_id == group_id)
@@ -159,15 +193,52 @@ def batch_update_accounts(payload: AccountBatch, db: DbSession, admin: AdminDep)
             status_code=400,
             detail=f"status 必须是 {sorted(BATCH_ALLOWED_STATUSES)} 之一",
         )
+    if payload.move_to_group_id is not None:
+        if not db.get(AccountGroup, payload.move_to_group_id):
+            raise HTTPException(status_code=400, detail="目标账号分组不存在")
+
     rows = list(db.scalars(select(Account).where(Account.id.in_(payload.ids))))
     for acc in rows:
         if payload.enabled is not None:
             acc.enabled = payload.enabled
         if payload.status is not None:
             acc.status = payload.status
+        # Bind / unbind proxy in bulk. Log each change via AccountProxyLog
+        # so the proxy audit trail stays consistent with single-account ops.
+        new_proxy_id = payload.proxy_id if payload.proxy_id is not None else (
+            None if payload.clear_proxy else "__unchanged__"
+        )
+        if new_proxy_id != "__unchanged__" and acc.proxy_id != new_proxy_id:
+            old = acc.proxy_id
+            acc.proxy_id = new_proxy_id
+            db.add(AccountProxyLog(
+                account_id=acc.id, old_proxy_id=old, new_proxy_id=new_proxy_id,
+                action="bind" if old is None and new_proxy_id is not None
+                else "unbind" if new_proxy_id is None
+                else "switch",
+                reason="batch",
+                created_by=admin.username,
+            ))
+
+    if payload.move_to_group_id is not None:
+        # Remove all existing primary memberships for these accounts, then
+        # insert one new primary row per account in the destination group.
+        db.execute(sa_delete(AccountGroupMember).where(
+            AccountGroupMember.account_id.in_(payload.ids),
+            AccountGroupMember.is_primary.is_(True),
+        ))
+        for acc in rows:
+            db.add(AccountGroupMember(
+                account_id=acc.id, group_id=payload.move_to_group_id, is_primary=True,
+            ))
+
     write_audit(
         db, actor=admin, action="account.batch_update",
-        detail={"ids": payload.ids, "enabled": payload.enabled, "status": payload.status},
+        detail={
+            "ids": payload.ids, "enabled": payload.enabled, "status": payload.status,
+            "proxy_id": payload.proxy_id, "clear_proxy": payload.clear_proxy,
+            "move_to_group_id": payload.move_to_group_id,
+        },
     )
     db.commit()
     return {"updated": len(rows)}

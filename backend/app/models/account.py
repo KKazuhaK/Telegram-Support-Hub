@@ -21,6 +21,10 @@ class Account(Base, TimestampMixin):
     total_replies: Mapped[int] = mapped_column(Integer, default=0)
     last_login_at: Mapped[str | None] = mapped_column(String(64))
     last_error: Mapped[str | None] = mapped_column(Text)
+    nickname: Mapped[str | None] = mapped_column(String(120), index=True)
+    country: Mapped[str | None] = mapped_column(String(8), index=True)
+    remark: Mapped[str | None] = mapped_column(Text)
+    avatar_status: Mapped[str | None] = mapped_column(String(32), index=True)
 
     proxy = relationship("ProxyEndpoint", back_populates="accounts")
     groups = relationship("AccountGroupMember", back_populates="account", cascade="all, delete-orphan")

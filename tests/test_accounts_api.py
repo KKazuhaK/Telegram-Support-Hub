@@ -131,6 +131,87 @@ class AccountsBatchApiTestCase(unittest.TestCase):
                 0,
             )
 
+    def test_batch_bind_proxy(self) -> None:
+        ids = self._ids()[:2]
+        with SessionLocal() as db:
+            from backend.app.models.proxy import ProxyEndpoint
+            p = ProxyEndpoint(name="p1", protocol="socks5", host="1.1.1.1", port=1080, status="active")
+            db.add(p)
+            db.commit()
+            pid = p.id
+
+        resp = self.client.post(
+            "/api/accounts/batch",
+            json={"ids": ids, "proxy_id": pid},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        with SessionLocal() as db:
+            for aid in ids:
+                self.assertEqual(db.get(Account, aid).proxy_id, pid)
+            # AccountProxyLog rows recorded
+            self.assertGreaterEqual(db.query(AccountProxyLog).count(), 2)
+
+    def test_batch_unbind_proxy(self) -> None:
+        ids = self._ids()[:2]
+        with SessionLocal() as db:
+            from backend.app.models.proxy import ProxyEndpoint
+            p = ProxyEndpoint(name="p1", protocol="socks5", host="1.1.1.1", port=1080)
+            db.add(p)
+            db.commit()
+            for a in db.query(Account).filter(Account.id.in_(ids)).all():
+                a.proxy_id = p.id
+            db.commit()
+
+        resp = self.client.post(
+            "/api/accounts/batch",
+            json={"ids": ids, "proxy_id": None, "clear_proxy": True},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        with SessionLocal() as db:
+            for aid in ids:
+                self.assertIsNone(db.get(Account, aid).proxy_id)
+
+    def test_batch_move_group(self) -> None:
+        ids = self._ids()[:2]
+        with SessionLocal() as db:
+            g1 = AccountGroup(name="g1", code="g1", enabled=True)
+            g2 = AccountGroup(name="g2", code="g2", enabled=True)
+            db.add(g1); db.add(g2)
+            db.flush()
+            for aid in ids:
+                db.add(AccountGroupMember(account_id=aid, group_id=g1.id, is_primary=True))
+            db.commit()
+            g2_id = g2.id
+
+        resp = self.client.post(
+            "/api/accounts/batch",
+            json={"ids": ids, "move_to_group_id": g2_id},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        with SessionLocal() as db:
+            for aid in ids:
+                members = list(db.query(AccountGroupMember).filter_by(account_id=aid).all())
+                self.assertEqual([m.group_id for m in members], [g2_id])
+                self.assertTrue(members[0].is_primary)
+
+    def test_list_filter_by_nickname_country(self) -> None:
+        with SessionLocal() as db:
+            ids = self._ids()
+            db.get(Account, ids[0]).nickname = "Alice"
+            db.get(Account, ids[0]).country = "US"
+            db.get(Account, ids[1]).nickname = "Bob"
+            db.get(Account, ids[1]).country = "CN"
+            db.commit()
+
+        rows_us = self.client.get("/api/accounts?country=US", headers=self.auth).json()
+        self.assertEqual([r["country"] for r in rows_us], ["US"])
+
+        rows_alice = self.client.get("/api/accounts?nickname=Alice", headers=self.auth).json()
+        self.assertEqual([r["nickname"] for r in rows_alice], ["Alice"])
+
     def test_batch_endpoints_require_admin(self) -> None:
         # Create a non-admin agent and login as them
         with SessionLocal() as db:

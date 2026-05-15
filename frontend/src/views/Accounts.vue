@@ -16,6 +16,7 @@
       </el-select>
       <el-input v-model="filters.phone" placeholder="手机号关键字" clearable style="width: 180px" />
       <el-button type="primary" @click="load">查询</el-button>
+      <el-button type="warning" @click="advancedDrawer = true">高级筛选</el-button>
       <el-button @click="resetFilters">重置</el-button>
       <el-button :loading="loading" @click="load">刷新</el-button>
     </div>
@@ -35,8 +36,88 @@
         <el-button :disabled="!selectedIds.length" @click="batchStatus('archived')">归档</el-button>
         <el-button :disabled="!selectedIds.length" type="danger" @click="batchDelete">批量删除</el-button>
       </el-button-group>
+      <el-dropdown v-if="auth.isAdmin" :disabled="!selectedIds.length" @command="onMoreCommand">
+        <el-button :disabled="!selectedIds.length">
+          更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+        </el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="move-group">转移到分组</el-dropdown-item>
+            <el-dropdown-item command="bind-proxy">分配代理</el-dropdown-item>
+            <el-dropdown-item command="unbind-proxy">解绑代理</el-dropdown-item>
+            <el-dropdown-item command="modify-info" divided>跳转『修改资料』</el-dropdown-item>
+            <el-dropdown-item command="batch-op">跳转『批量操作』</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
       <span class="hint">已选 {{ selectedIds.length }} 个</span>
     </div>
+
+    <el-drawer v-model="advancedDrawer" title="高级筛选" size="380px" direction="rtl">
+      <el-form :model="filters" label-width="100px">
+        <el-form-item label="账号昵称">
+          <el-input v-model="filters.nickname" clearable />
+        </el-form-item>
+        <el-form-item label="国家代码">
+          <el-input v-model="filters.country" clearable placeholder="如 CN / US" />
+        </el-form-item>
+        <el-form-item label="头像状态">
+          <el-select v-model="filters.avatar_status" clearable style="width: 100%">
+            <el-option label="已上传" value="set" />
+            <el-option label="未上传" value="empty" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="是否绑代理">
+          <el-select v-model="filters.has_proxy" clearable style="width: 100%">
+            <el-option label="已绑定" :value="true" />
+            <el-option label="未绑定" :value="false" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注关键字">
+          <el-input v-model="filters.remark" clearable />
+        </el-form-item>
+        <el-form-item label="最近登录">
+          <el-date-picker
+            v-model="filters.range" type="daterange" value-format="YYYY-MM-DD"
+            start-placeholder="开始日期" end-placeholder="结束日期" style="width: 100%"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="resetAdvanced">重置高级</el-button>
+        <el-button type="primary" @click="applyAdvanced">查询</el-button>
+      </template>
+    </el-drawer>
+
+    <el-dialog v-model="moveGroupDialog" title="转移到分组" width="420px">
+      <el-form :model="moveGroupForm" label-width="100px">
+        <el-form-item label="目标分组">
+          <el-select v-model="moveGroupForm.group_id" style="width: 100%">
+            <el-option v-for="g in groups" :key="g.id" :label="g.name" :value="g.id" />
+          </el-select>
+        </el-form-item>
+        <p class="hint" style="margin-left: 100px">将清空所选账号现有主分组，并加入目标分组。</p>
+      </el-form>
+      <template #footer>
+        <el-button @click="moveGroupDialog = false">取消</el-button>
+        <el-button type="primary" :loading="busy" @click="doMoveGroup">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="bindProxyDialog" title="分配代理" width="420px">
+      <el-form label-width="100px">
+        <el-form-item label="代理">
+          <el-select v-model="bindProxyForm.proxy_id" filterable style="width: 100%">
+            <el-option v-for="p in proxies" :key="p.id"
+                       :label="`${p.name} (${p.host}:${p.port})`" :value="p.id" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="bindProxyDialog = false">取消</el-button>
+        <el-button type="primary" :loading="busy" @click="doBindProxy">确定</el-button>
+      </template>
+    </el-dialog>
 
     <el-table
       ref="tableRef"
@@ -90,15 +171,30 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import http from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
+const router = useRouter()
 const rows = ref([])
 const groups = ref([])
+const proxies = ref([])
 const loading = ref(false)
+const busy = ref(false)
 const statusTab = ref('all')
-const filters = reactive({ group_id: null, phone: '' })
+const filters = reactive({
+  group_id: null, phone: '',
+  nickname: '', country: '', avatar_status: '', has_proxy: null,
+  remark: '', range: [],
+})
+
+const advancedDrawer = ref(false)
+const moveGroupDialog = ref(false)
+const moveGroupForm = reactive({ group_id: null })
+const bindProxyDialog = ref(false)
+const bindProxyForm = reactive({ proxy_id: null })
 
 const tableRef = ref(null)
 const selectedRows = ref([])
@@ -121,6 +217,15 @@ function buildParams() {
   else if (statusTab.value !== 'all') params.status = statusTab.value
   if (filters.group_id) params.group_id = filters.group_id
   if (filters.phone) params.phone = filters.phone
+  if (filters.nickname) params.nickname = filters.nickname
+  if (filters.country) params.country = filters.country
+  if (filters.avatar_status) params.avatar_status = filters.avatar_status
+  if (filters.has_proxy !== null && filters.has_proxy !== '') params.has_proxy = filters.has_proxy
+  if (filters.remark) params.remark = filters.remark
+  if (filters.range?.length === 2) {
+    params.from_date = filters.range[0]
+    params.to_date = filters.range[1]
+  }
   return params
 }
 
@@ -139,8 +244,86 @@ async function load() {
 function resetFilters() {
   filters.group_id = null
   filters.phone = ''
+  filters.nickname = ''
+  filters.country = ''
+  filters.avatar_status = ''
+  filters.has_proxy = null
+  filters.remark = ''
+  filters.range = []
   statusTab.value = 'all'
   load()
+}
+
+function resetAdvanced() {
+  filters.nickname = ''
+  filters.country = ''
+  filters.avatar_status = ''
+  filters.has_proxy = null
+  filters.remark = ''
+  filters.range = []
+}
+
+function applyAdvanced() {
+  advancedDrawer.value = false
+  load()
+}
+
+async function onMoreCommand(cmd) {
+  if (cmd === 'move-group') {
+    moveGroupForm.group_id = null
+    moveGroupDialog.value = true
+  } else if (cmd === 'bind-proxy') {
+    if (!proxies.value.length) {
+      const { data } = await http.get('/proxies')
+      proxies.value = data
+    }
+    bindProxyForm.proxy_id = null
+    bindProxyDialog.value = true
+  } else if (cmd === 'unbind-proxy') {
+    await ElMessageBox.confirm(
+      `确认解绑 ${selectedIds.value.length} 个账号的代理？`,
+      '解绑代理',
+      { type: 'warning' },
+    )
+    await http.post('/accounts/batch', {
+      ids: selectedIds.value, proxy_id: null, clear_proxy: true,
+    })
+    ElMessage.success('已解绑代理')
+    tableRef.value?.clearSelection?.()
+    await load()
+  } else if (cmd === 'modify-info') {
+    router.push({ name: 'modify-info' })
+  } else if (cmd === 'batch-op') {
+    router.push({ name: 'batch-operations' })
+  }
+}
+
+async function doMoveGroup() {
+  if (!moveGroupForm.group_id) { ElMessage.warning('请选择目标分组'); return }
+  busy.value = true
+  try {
+    await http.post('/accounts/batch', {
+      ids: selectedIds.value, move_to_group_id: moveGroupForm.group_id,
+    })
+    ElMessage.success(`已转移 ${selectedIds.value.length} 个账号`)
+    moveGroupDialog.value = false
+    tableRef.value?.clearSelection?.()
+    await load()
+  } finally { busy.value = false }
+}
+
+async function doBindProxy() {
+  if (!bindProxyForm.proxy_id) { ElMessage.warning('请选择代理'); return }
+  busy.value = true
+  try {
+    await http.post('/accounts/batch', {
+      ids: selectedIds.value, proxy_id: bindProxyForm.proxy_id,
+    })
+    ElMessage.success(`已为 ${selectedIds.value.length} 个账号分配代理`)
+    bindProxyDialog.value = false
+    tableRef.value?.clearSelection?.()
+    await load()
+  } finally { busy.value = false }
 }
 
 function onStatusTabChange() {
