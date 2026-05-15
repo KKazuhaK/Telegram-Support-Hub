@@ -5,6 +5,7 @@ from sqlalchemy import select
 from backend.app.api.deps import CurrentUserDep, DbSession
 from backend.app.models.template import MessageTemplate
 from backend.app.services.audit import write_audit
+from backend.app.services.permissions import permission_denied_detail
 from backend.app.services.serializers import list_dict, to_dict
 
 router = APIRouter()
@@ -29,7 +30,7 @@ def list_templates(db: DbSession, _: CurrentUserDep) -> list[dict]:
 @router.post("")
 def create_template(payload: TemplateCreate, db: DbSession, user: CurrentUserDep) -> dict:
     if not (user.is_admin or user.can("can_broadcast")):
-        raise HTTPException(status_code=403, detail="missing can_broadcast")
+        raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
     template = MessageTemplate(name=payload.name, body=payload.body, created_by=user.username)
     db.add(template)
     db.flush()
@@ -43,10 +44,10 @@ def create_template(payload: TemplateCreate, db: DbSession, user: CurrentUserDep
 @router.patch("/{template_id}")
 def update_template(template_id: int, payload: TemplateUpdate, db: DbSession, user: CurrentUserDep) -> dict:
     if not (user.is_admin or user.can("can_broadcast")):
-        raise HTTPException(status_code=403, detail="missing can_broadcast")
+        raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
     template = db.get(MessageTemplate, template_id)
     if not template:
-        raise HTTPException(status_code=404, detail="template not found")
+        raise HTTPException(status_code=404, detail="模板不存在")
     values = payload.model_dump(exclude_unset=True)
     for key, value in values.items():
         setattr(template, key, value)

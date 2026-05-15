@@ -12,6 +12,7 @@ from backend.app.models.message import MessageRecord
 from backend.app.models.template import MessageTemplate
 from backend.app.services.audit import write_audit
 from backend.app.services.imported_target import build_imported_target_records
+from backend.app.services.permissions import permission_denied_detail
 from backend.app.services.serializers import list_dict, to_dict
 from backend.app.services.template_renderer import render_template
 
@@ -46,7 +47,7 @@ class CampaignCreate(BaseModel):
 
 def _require_broadcast(user) -> None:
     if not (user.is_admin or user.can("can_broadcast")):
-        raise HTTPException(status_code=403, detail="missing can_broadcast")
+        raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
 
 
 def _scope_groups(user, requested: list[int]) -> list[int]:
@@ -57,7 +58,10 @@ def _scope_groups(user, requested: list[int]) -> list[int]:
         return list(visible)
     invalid = [g for g in requested if g not in visible]
     if invalid:
-        raise HTTPException(status_code=403, detail=f"groups outside permission: {invalid}")
+        raise HTTPException(
+            status_code=403,
+            detail=f"以下账号分组不在你的权限范围内：{invalid}",
+        )
     return requested
 
 
@@ -123,11 +127,14 @@ def list_campaigns(db: DbSession, user: CurrentUserDep, limit: int = 100, offset
 def create_campaign(payload: CampaignCreate, db: DbSession, user: CurrentUserDep) -> dict:
     _require_broadcast(user)
     if payload.target_type not in ALLOWED_TARGET_TYPES:
-        raise HTTPException(status_code=400, detail=f"target_type must be one of {sorted(ALLOWED_TARGET_TYPES)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"任务类型必须是 {sorted(ALLOWED_TARGET_TYPES)} 之一",
+        )
 
     template = db.get(MessageTemplate, payload.template_id)
     if not template or not template.enabled:
-        raise HTTPException(status_code=400, detail="template not found or disabled")
+        raise HTTPException(status_code=400, detail="模板不存在或已禁用")
 
     group_ids = _scope_groups(user, payload.account_group_ids)
 
@@ -155,7 +162,7 @@ def create_campaign(payload: CampaignCreate, db: DbSession, user: CurrentUserDep
 
     if count == 0:
         db.rollback()
-        raise HTTPException(status_code=400, detail="no eligible targets for this campaign")
+        raise HTTPException(status_code=400, detail="没有满足条件的目标，请检查授权状态/分配/好友列表")
 
     campaign.target_count = count
     campaign.queued_count = count
@@ -169,10 +176,13 @@ def create_campaign(payload: CampaignCreate, db: DbSession, user: CurrentUserDep
 def _get_campaign_with_perm(db: DbSession, user, campaign_id: int) -> Campaign:
     campaign = db.get(Campaign, campaign_id)
     if not campaign:
-        raise HTTPException(status_code=404, detail="campaign not found")
+        raise HTTPException(status_code=404, detail="群发任务不存在")
     if not user.is_admin:
         if not (user.can("can_broadcast") or user.can("can_send_message")):
-            raise HTTPException(status_code=403, detail="missing permission")
+            raise HTTPException(
+                status_code=403,
+                detail="当前账号没有操作群发任务的权限，请联系管理员升级",
+            )
     return campaign
 
 

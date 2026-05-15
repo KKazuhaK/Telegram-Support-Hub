@@ -68,7 +68,7 @@ def pick_proxy_for_account(
     """
     candidates = _candidates(db)
     if not candidates:
-        raise PoolError("no active proxies in pool")
+        raise PoolError("代理池中没有可用代理")
 
     load = _proxy_load(db)
     available = [
@@ -76,7 +76,7 @@ def pick_proxy_for_account(
         if p.max_accounts is None or load.get(p.id, 0) < p.max_accounts
     ]
     if not available:
-        raise PoolError("all active proxies at capacity")
+        raise PoolError("可用代理均已达到绑定上限")
 
     desired_country = prefer_country or country_from_phone(account.phone)
     if desired_country:

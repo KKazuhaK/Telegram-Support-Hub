@@ -39,8 +39,8 @@ const cards = computed(() => {
     { title: '群发任务', value: d.campaigns?.total, sub: `进行中 ${d.campaigns?.running ?? 0} / 完成 ${d.campaigns?.completed ?? 0}`, color: '#722ed1' },
     { title: '代理', value: d.proxies?.total, sub: `正常 ${d.proxies?.active ?? 0} / 异常 ${d.proxies?.error ?? 0}`, color: '#13c2c2' },
     { title: '好友', value: d.friends?.total, sub: `已回复 ${d.friends?.replied ?? 0} / 退订 ${d.friends?.opted_out ?? 0}`, color: '#eb2f96' },
-    { title: '消息状态', value: d.messages?.replied, sub: `发送中 ${d.messages?.sending ?? 0} / 已读未回 ${d.customers?.queued ?? 0}`, color: '#fa541c' },
-    { title: '账号分组', value: d.account_groups?.total, sub: '在策划第 5.1.1 节定义', color: '#2f54eb' },
+    { title: '消息回复', value: d.messages?.replied, sub: `发送中 ${d.messages?.sending ?? 0} / 已读未回 ${d.customers?.queued ?? 0}`, color: '#fa541c' },
+    { title: '账号分组', value: d.account_groups?.total, sub: `已使用的分组数量`, color: '#2f54eb' },
   ]
 })
 </script>

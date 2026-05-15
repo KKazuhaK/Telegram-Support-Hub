@@ -47,7 +47,7 @@ def list_agents(db: DbSession, _: AdminDep) -> list[dict]:
 @router.post("")
 def create_agent(payload: SupportAgentCreate, db: DbSession, admin: AdminDep) -> dict:
     if db.scalar(select(SupportAgent).where(SupportAgent.username == payload.username)):
-        raise HTTPException(status_code=409, detail="username already exists")
+        raise HTTPException(status_code=409, detail="该用户名已被占用")
 
     agent = SupportAgent(
         username=payload.username,
@@ -69,7 +69,7 @@ def create_agent(payload: SupportAgentCreate, db: DbSession, admin: AdminDep) ->
 def update_agent(agent_id: int, payload: SupportAgentUpdate, db: DbSession, admin: AdminDep) -> dict:
     agent = db.get(SupportAgent, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="support agent not found")
+        raise HTTPException(status_code=404, detail="客服账号不存在")
     values = payload.model_dump(exclude_unset=True)
     if "password" in values:
         plain = values.pop("password")
@@ -88,7 +88,7 @@ def update_agent(agent_id: int, payload: SupportAgentUpdate, db: DbSession, admi
 @router.get("/{agent_id}/account-group-permissions")
 def list_group_permissions(agent_id: int, db: DbSession, _: AdminDep) -> list[dict]:
     if not db.get(SupportAgent, agent_id):
-        raise HTTPException(status_code=404, detail="support agent not found")
+        raise HTTPException(status_code=404, detail="客服账号不存在")
     rows = list(
         db.scalars(
             select(SupportAgentGroupPermission)
@@ -102,7 +102,7 @@ def list_group_permissions(agent_id: int, db: DbSession, _: AdminDep) -> list[di
 @router.put("/{agent_id}/account-group-permissions")
 def replace_group_permissions(agent_id: int, payload: list[GroupPermissionInput], db: DbSession, admin: AdminDep) -> list[dict]:
     if not db.get(SupportAgent, agent_id):
-        raise HTTPException(status_code=404, detail="support agent not found")
+        raise HTTPException(status_code=404, detail="客服账号不存在")
     db.execute(delete(SupportAgentGroupPermission).where(SupportAgentGroupPermission.agent_id == agent_id))
     rows: list[SupportAgentGroupPermission] = []
     for item in payload:

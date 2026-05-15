@@ -62,7 +62,7 @@ def _ensure_account_visible(db, user, account: Account) -> None:
         select(AccountGroupMember).where(AccountGroupMember.account_id == account.id)
     )]
     if not set(member_ids).intersection(user.visible_group_ids()):
-        raise HTTPException(status_code=403, detail="account not in your visible groups")
+        raise HTTPException(status_code=403, detail="该 TG 账号不在你授权的账号分组内")
 
 
 @router.get("")
@@ -74,7 +74,7 @@ def list_accounts(db: DbSession, user: CurrentUserDep) -> list[dict]:
 @router.post("/import-zip")
 async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File(...)) -> dict:
     if not sessions.filename or not sessions.filename.lower().endswith(".zip"):
-        raise HTTPException(status_code=400, detail="zip file required")
+        raise HTTPException(status_code=400, detail="请上传 .zip 后缀的 session 压缩包")
 
     content = await sessions.read()
     default_group = ensure_default_group(db)
@@ -84,7 +84,7 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
     try:
         zf = zipfile.ZipFile(BytesIO(content))
     except zipfile.BadZipFile as exc:
-        raise HTTPException(status_code=400, detail="invalid zip file") from exc
+        raise HTTPException(status_code=400, detail="ZIP 文件损坏或格式不正确") from exc
 
     for info in zf.infolist():
         if info.is_dir() or not info.filename.lower().endswith(".session"):
@@ -122,7 +122,7 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
 def update_account(account_id: int, payload: AccountUpdate, db: DbSession, admin: AdminDep) -> dict:
     account = db.get(Account, account_id)
     if not account:
-        raise HTTPException(status_code=404, detail="account not found")
+        raise HTTPException(status_code=404, detail="TG 账号不存在")
     values = payload.model_dump(exclude_unset=True)
     for key, value in values.items():
         setattr(account, key, value)
@@ -137,7 +137,7 @@ def update_account(account_id: int, payload: AccountUpdate, db: DbSession, admin
 def bind_proxy(account_id: int, payload: AccountProxyBind, db: DbSession, admin: AdminDep) -> dict:
     account = db.get(Account, account_id)
     if not account:
-        raise HTTPException(status_code=404, detail="account not found")
+        raise HTTPException(status_code=404, detail="TG 账号不存在")
     old_proxy_id = account.proxy_id
     account.proxy_id = payload.proxy_id
     db.add(
@@ -162,7 +162,7 @@ def bind_proxy(account_id: int, payload: AccountProxyBind, db: DbSession, admin:
 def auto_bind_proxy(account_id: int, db: DbSession, admin: AdminDep, prefer_country: str | None = None) -> dict:
     account = db.get(Account, account_id)
     if not account:
-        raise HTTPException(status_code=404, detail="account not found")
+        raise HTTPException(status_code=404, detail="TG 账号不存在")
     old_proxy_id = account.proxy_id
     try:
         proxy = auto_assign_proxy(db, account, prefer_country=prefer_country)
@@ -185,7 +185,7 @@ def auto_bind_proxy(account_id: int, db: DbSession, admin: AdminDep, prefer_coun
 def unbind_proxy(account_id: int, db: DbSession, admin: AdminDep) -> dict:
     account = db.get(Account, account_id)
     if not account:
-        raise HTTPException(status_code=404, detail="account not found")
+        raise HTTPException(status_code=404, detail="TG 账号不存在")
     old_proxy_id = account.proxy_id
     account.proxy_id = None
     db.add(AccountProxyLog(account_id=account.id, old_proxy_id=old_proxy_id, action="unbind", created_by=admin.username))

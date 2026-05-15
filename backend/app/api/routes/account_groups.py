@@ -54,7 +54,7 @@ def create_group(payload: AccountGroupCreate, db: DbSession, admin: AdminDep) ->
 def update_group(group_id: int, payload: AccountGroupUpdate, db: DbSession, admin: AdminDep) -> dict:
     group = db.get(AccountGroup, group_id)
     if not group:
-        raise HTTPException(status_code=404, detail="account group not found")
+        raise HTTPException(status_code=404, detail="账号分组不存在")
     values = payload.model_dump(exclude_unset=True)
     for key, value in values.items():
         setattr(group, key, value)
@@ -68,9 +68,9 @@ def update_group(group_id: int, payload: AccountGroupUpdate, db: DbSession, admi
 @router.post("/{group_id}/members")
 def add_group_member(group_id: int, payload: AccountGroupMemberCreate, db: DbSession, admin: AdminDep) -> dict:
     if not db.get(AccountGroup, group_id):
-        raise HTTPException(status_code=404, detail="account group not found")
+        raise HTTPException(status_code=404, detail="账号分组不存在")
     if not db.get(Account, payload.account_id):
-        raise HTTPException(status_code=404, detail="account not found")
+        raise HTTPException(status_code=404, detail="TG 账号不存在")
 
     existing = db.scalar(
         select(AccountGroupMember).where(
@@ -100,7 +100,7 @@ def remove_group_member(group_id: int, account_id: int, db: DbSession, admin: Ad
         )
     )
     if not member:
-        raise HTTPException(status_code=404, detail="member not found")
+        raise HTTPException(status_code=404, detail="该账号未加入此分组")
     db.delete(member)
     write_audit(db, actor=admin, action="account_group.remove_member",
                 target_type="account_group", target_id=group_id,

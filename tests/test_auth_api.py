@@ -55,6 +55,35 @@ class AuthApiTestCase(unittest.TestCase):
     def test_protected_endpoint_without_token_rejected(self) -> None:
         resp = self.client.get("/api/customers")
         self.assertEqual(resp.status_code, 401)
+        # User-facing error must be Chinese, not raw English token wording
+        self.assertIn("登录", resp.json()["detail"])
+
+    def test_login_wrong_password_message_is_chinese(self) -> None:
+        self.client.post("/api/auth/bootstrap-admin",
+                         json={"username": "root", "password": "12345678"})
+        resp = self.client.post("/api/auth/login",
+                                json={"username": "root", "password": "WRONGPASS"})
+        self.assertEqual(resp.status_code, 401)
+        self.assertIn("用户名或密码", resp.json()["detail"])
+
+    def test_has_admin_endpoint_reflects_state(self) -> None:
+        empty = self.client.get("/api/auth/has-admin")
+        self.assertEqual(empty.status_code, 200)
+        self.assertEqual(empty.json(), {"has_admin": False})
+
+        self.client.post("/api/auth/bootstrap-admin",
+                         json={"username": "root", "password": "12345678"})
+
+        after = self.client.get("/api/auth/has-admin")
+        self.assertEqual(after.json(), {"has_admin": True})
+
+    def test_bootstrap_after_admin_exists_returns_chinese(self) -> None:
+        self.client.post("/api/auth/bootstrap-admin",
+                         json={"username": "root", "password": "12345678"})
+        resp = self.client.post("/api/auth/bootstrap-admin",
+                                json={"username": "other", "password": "12345678"})
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn("管理员", resp.json()["detail"])
 
 
 if __name__ == "__main__":

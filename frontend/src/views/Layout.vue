@@ -38,7 +38,7 @@
       <el-header class="topbar">
         <span class="page-title">{{ pageTitle }}</span>
         <div class="topbar-right">
-          <el-tag size="small" :type="auth.isAdmin ? 'danger' : 'info'">{{ auth.role || 'guest' }}</el-tag>
+          <el-tag size="small" :type="auth.isAdmin ? 'danger' : 'info'">{{ roleLabel }}</el-tag>
           <span class="username">{{ auth.username }}</span>
           <el-button link type="primary" @click="logout">退出</el-button>
         </div>
@@ -78,7 +78,9 @@ const TITLES = {
   agents: '客服中心',
   'audit-logs': '审计日志',
 }
+const ROLE_LABELS = { admin: '管理员', supervisor: '主管', agent: '客服' }
 const pageTitle = computed(() => TITLES[route.name] || '')
+const roleLabel = computed(() => ROLE_LABELS[auth.role] || auth.role || '未登录')
 
 function logout() {
   auth.logout()

@@ -9,6 +9,25 @@ from backend.app.models.agent import SupportAgent, SupportAgentGroupPermission
 
 ADMIN_ROLES = {"admin", "supervisor"}
 
+# Map machine-readable permission attrs to user-facing Chinese labels.
+PERM_LABELS = {
+    "can_view_friends": "查看好友",
+    "can_view_chats": "查看聊天",
+    "can_send_message": "发送消息",
+    "can_broadcast": "发起群发任务",
+    "can_edit_profile": "修改账号资料",
+    "can_delete_friend": "删除好友",
+    "can_clear_chat": "清理聊天记录",
+    "can_export_data": "导出数据",
+}
+
+ROLE_LABELS = {"admin": "管理员", "supervisor": "主管", "agent": "客服"}
+
+
+def permission_denied_detail(attr: str) -> str:
+    label = PERM_LABELS.get(attr, attr)
+    return f"当前账号缺少『{label}』权限，请联系管理员升级"
+
 
 @dataclass
 class CurrentUser:

@@ -4,7 +4,7 @@
       <h2>TG Support Hub</h2>
       <el-tabs v-model="mode">
         <el-tab-pane label="登录" name="login" />
-        <el-tab-pane label="初始化管理员" name="bootstrap" />
+        <el-tab-pane :label="bootstrapTabLabel" name="bootstrap" :disabled="hasAdmin" />
       </el-tabs>
       <el-form :model="form" label-width="80px" @submit.prevent>
         <el-form-item label="用户名">
@@ -22,13 +22,13 @@
           </el-button>
         </el-form-item>
       </el-form>
-      <p class="hint">{{ mode === 'login' ? '没有账号？切换到“初始化管理员”创建首个 admin。' : '仅当系统尚无管理员时可用。' }}</p>
+      <p class="hint">{{ hint }}</p>
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
@@ -39,7 +39,36 @@ const route = useRoute()
 const auth = useAuthStore()
 const mode = ref('login')
 const loading = ref(false)
+const hasAdmin = ref(false)
 const form = reactive({ username: '', password: '', nickname: '' })
+
+const bootstrapTabLabel = computed(() => (hasAdmin.value ? '初始化管理员（已禁用）' : '初始化管理员'))
+
+const hint = computed(() => {
+  if (mode.value === 'login') {
+    return hasAdmin.value
+      ? '请使用管理员或客服账号登录。'
+      : '系统尚未初始化管理员，请先切换到右侧标签创建首个 admin。'
+  }
+  return hasAdmin.value
+    ? '系统已存在管理员账号，无法重复初始化。请切回登录标签。'
+    : '仅当系统尚无管理员时可用。'
+})
+
+async function loadHasAdmin() {
+  try {
+    const { data } = await http.get('/auth/has-admin')
+    hasAdmin.value = !!data?.has_admin
+  } catch (_) {
+    // network/backend down — leave default false; user will see real error on submit
+  }
+}
+
+watch(hasAdmin, (v) => {
+  // Force user back to the only available tab.
+  if (v && mode.value === 'bootstrap') mode.value = 'login'
+  if (!v && mode.value === 'login') mode.value = 'bootstrap'
+}, { immediate: false })
 
 async function submit() {
   if (!form.username || !form.password) {
@@ -65,6 +94,8 @@ async function submit() {
     loading.value = false
   }
 }
+
+onMounted(loadHasAdmin)
 </script>
 
 <style scoped>

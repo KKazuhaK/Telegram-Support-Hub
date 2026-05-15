@@ -8,6 +8,7 @@ from backend.app.models.customer import Customer, Friend
 from backend.app.services.assignment import assign_customers
 from backend.app.services.audit import write_audit
 from backend.app.services.parsers import parse_customer_text
+from backend.app.services.permissions import permission_denied_detail
 from backend.app.services.serializers import list_dict, to_dict
 
 router = APIRouter()
@@ -55,7 +56,7 @@ def list_customers(
 @router.post("/import")
 def import_customers(payload: CustomerImport, db: DbSession, user: CurrentUserDep) -> dict:
     if not (user.is_admin or user.can("can_broadcast")):
-        raise HTTPException(status_code=403, detail="missing can_broadcast")
+        raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
 
     imported, rejected = parse_customer_text(payload.text, payload.source, payload.assume_consent)
     created: list[dict] = []
@@ -80,7 +81,7 @@ def import_customers(payload: CustomerImport, db: DbSession, user: CurrentUserDe
 @router.post("/assign")
 def assign(payload: CustomerAssign, db: DbSession, user: CurrentUserDep) -> dict:
     if not (user.is_admin or user.can("can_broadcast")):
-        raise HTTPException(status_code=403, detail="missing can_broadcast")
+        raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
 
     scoped_groups = _scope_accounts_to_user(db, user, payload.account_group_ids)
     result = assign_customers(
@@ -117,10 +118,10 @@ def list_friends(
 def trigger_friend_sync(db: DbSession, user: CurrentUserDep, account_id: int) -> dict:
     """Queue a Celery task to sync friends from the given account's Telegram dialogs."""
     if not user.is_admin:
-        raise HTTPException(status_code=403, detail="admin only")
+        raise HTTPException(status_code=403, detail="该操作仅限管理员")
     account = db.get(Account, account_id)
     if not account:
-        raise HTTPException(status_code=404, detail="account not found")
+        raise HTTPException(status_code=404, detail="TG 账号不存在")
 
     from backend.app.workers.account_tasks import sync_account_friends
     task = sync_account_friends.delay(account_id)

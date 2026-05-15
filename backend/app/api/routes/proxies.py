@@ -70,7 +70,7 @@ def create_proxy(payload: ProxyCreate, db: DbSession, admin: AdminDep) -> dict:
 def update_proxy(proxy_id: int, payload: ProxyUpdate, db: DbSession, admin: AdminDep) -> dict:
     proxy = db.get(ProxyEndpoint, proxy_id)
     if not proxy:
-        raise HTTPException(status_code=404, detail="proxy not found")
+        raise HTTPException(status_code=404, detail="代理不存在")
     values = payload.model_dump(exclude_unset=True)
     if "password" in values:
         values["password_encrypted"] = encrypt_secret(values.pop("password"))
@@ -88,7 +88,7 @@ def update_proxy(proxy_id: int, payload: ProxyUpdate, db: DbSession, admin: Admi
 def check_proxy(proxy_id: int, db: DbSession, _: AdminDep) -> dict:
     proxy = db.get(ProxyEndpoint, proxy_id)
     if not proxy:
-        raise HTTPException(status_code=404, detail="proxy not found")
+        raise HTTPException(status_code=404, detail="代理不存在")
 
     result = check_tcp(proxy.host, proxy.port)
     proxy.status = "active" if result.ok else "error"
