@@ -3,9 +3,9 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from pydantic import BaseModel
-from sqlalchemy import select
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
+from sqlalchemy import delete as sa_delete, select
 
 from backend.app.api.deps import AdminDep, CurrentUserDep, DbSession
 from backend.app.core.config import settings
@@ -28,6 +28,20 @@ class AccountUpdate(BaseModel):
 class AccountProxyBind(BaseModel):
     proxy_id: int
     reason: str | None = None
+
+
+# Whitelist of statuses an admin can set via the batch endpoint.
+BATCH_ALLOWED_STATUSES = {"active", "paused", "limited", "error", "imported", "archived"}
+
+
+class AccountBatch(BaseModel):
+    ids: list[int] = Field(min_length=1)
+    enabled: bool | None = None
+    status: str | None = None
+
+
+class AccountBatchDelete(BaseModel):
+    ids: list[int] = Field(min_length=1)
 
 
 def safe_part(value: str) -> str:
@@ -66,9 +80,29 @@ def _ensure_account_visible(db, user, account: Account) -> None:
 
 
 @router.get("")
-def list_accounts(db: DbSession, user: CurrentUserDep) -> list[dict]:
-    stmt = _filter_account_query(select(Account).order_by(Account.id.desc()), user)
-    return list_dict(list(db.scalars(stmt)))
+def list_accounts(
+    db: DbSession,
+    user: CurrentUserDep,
+    status: str | None = None,
+    enabled: bool | None = None,
+    phone: str | None = None,
+    group_id: int | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> list[dict]:
+    stmt = select(Account).order_by(Account.id.desc())
+    stmt = _filter_account_query(stmt, user)
+    if status:
+        stmt = stmt.where(Account.status == status)
+    if enabled is not None:
+        stmt = stmt.where(Account.enabled.is_(enabled))
+    if phone:
+        stmt = stmt.where(Account.phone.like(f"%{phone}%"))
+    if group_id:
+        stmt = stmt.where(Account.id.in_(
+            select(AccountGroupMember.account_id).where(AccountGroupMember.group_id == group_id)
+        ))
+    return list_dict(list(db.scalars(stmt.offset(offset).limit(limit))))
 
 
 @router.post("/import-zip")
@@ -116,6 +150,43 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
                 detail={"imported": len(imported), "skipped": len(skipped)})
     db.commit()
     return {"imported": imported, "skipped": skipped}
+
+
+@router.post("/batch")
+def batch_update_accounts(payload: AccountBatch, db: DbSession, admin: AdminDep) -> dict:
+    if payload.status is not None and payload.status not in BATCH_ALLOWED_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status 必须是 {sorted(BATCH_ALLOWED_STATUSES)} 之一",
+        )
+    rows = list(db.scalars(select(Account).where(Account.id.in_(payload.ids))))
+    for acc in rows:
+        if payload.enabled is not None:
+            acc.enabled = payload.enabled
+        if payload.status is not None:
+            acc.status = payload.status
+    write_audit(
+        db, actor=admin, action="account.batch_update",
+        detail={"ids": payload.ids, "enabled": payload.enabled, "status": payload.status},
+    )
+    db.commit()
+    return {"updated": len(rows)}
+
+
+@router.delete("/batch")
+def batch_delete_accounts(payload: AccountBatchDelete = Body(...), *, db: DbSession, admin: AdminDep) -> dict:
+    rows = list(db.scalars(select(Account).where(Account.id.in_(payload.ids))))
+    if not rows:
+        return {"deleted": 0}
+    db.execute(sa_delete(AccountGroupMember).where(AccountGroupMember.account_id.in_(payload.ids)))
+    for acc in rows:
+        db.delete(acc)
+    write_audit(
+        db, actor=admin, action="account.batch_delete",
+        detail={"ids": payload.ids, "count": len(rows)},
+    )
+    db.commit()
+    return {"deleted": len(rows)}
 
 
 @router.patch("/{account_id}")
