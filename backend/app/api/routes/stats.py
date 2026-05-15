@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
 from backend.app.api.deps import CurrentUserDep, DbSession
@@ -11,6 +12,7 @@ from backend.app.models.campaign import Campaign
 from backend.app.models.customer import Customer, Friend
 from backend.app.models.message import MessageRecord
 from backend.app.models.proxy import ProxyEndpoint
+from backend.app.services.export import to_csv_stream
 from backend.app.services.serializers import list_dict
 
 router = APIRouter()
@@ -295,3 +297,27 @@ def message_details(
         # Treat to_date as inclusive end-of-day.
         stmt = stmt.where(MessageRecord.sent_at < f"{to_date}T23:59:60")
     return list_dict(list(db.scalars(stmt.offset(offset).limit(limit))))
+
+
+def _timeseries_rows(buckets):
+    yield ["date", "sent", "read", "replied", "failed"]
+    for b in buckets:
+        yield [str(b["date"]), str(b["sent"]), str(b["read"]),
+               str(b["replied"]), str(b["failed"])]
+
+
+@router.get("/timeseries.csv")
+def export_timeseries(
+    db: DbSession, _: CurrentUserDep,
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+    bucket: str = "day",
+) -> StreamingResponse:
+    """CSV equivalent of /api/statistics/timeseries — same buckets, no
+    totals (totals are easy to compute downstream)."""
+    data = timeseries(db, _, from_date=from_date, to_date=to_date, bucket=bucket)
+    return StreamingResponse(
+        to_csv_stream(_timeseries_rows(data["buckets"])),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=timeseries.csv"},
+    )

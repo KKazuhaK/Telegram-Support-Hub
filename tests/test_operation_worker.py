@@ -151,6 +151,39 @@ class ExecuteBatchOpTestCase(unittest.TestCase):
         self.assertEqual(result["status"], "skipped")
         self.assertEqual(result["reason"], "broadcast_handled_by_send_worker")
 
+    def test_leave_group_passes_through(self) -> None:
+        group, accs = _seed(self.db, n_accounts=1)
+        cmp = _make_campaign(self.db, group.id, task_kind="batch_op",
+                             operation_target="leave_group")
+
+        captured = {}
+
+        def fake_op(account, proxy, operation, params):
+            captured["op"] = operation
+            return _FakeOpResult(ok=True)
+
+        with patch.object(execute_operation, "_run_operation", side_effect=fake_op):
+            execute_operation.execute_operation_campaign(cmp.id)
+
+        self.assertEqual(captured["op"], "leave_group")
+
+    def test_detect_mutual_passes_through(self) -> None:
+        group, accs = _seed(self.db, n_accounts=1)
+        cmp = _make_campaign(self.db, group.id, task_kind="batch_op",
+                             operation_target="detect_mutual")
+
+        captured = {}
+
+        def fake_op(account, proxy, operation, params):
+            captured["op"] = operation
+            return _FakeOpResult(ok=True, detail="3 mutual contacts")
+
+        with patch.object(execute_operation, "_run_operation", side_effect=fake_op):
+            result = execute_operation.execute_operation_campaign(cmp.id)
+
+        self.assertEqual(captured["op"], "detect_mutual")
+        self.assertEqual(result["ok_count"], 1)
+
     def test_modify_avatar_passes_material_file_path(self) -> None:
         # modify_avatar should resolve the supplied material_id to its
         # stored file_path before calling the adapter; if the material is

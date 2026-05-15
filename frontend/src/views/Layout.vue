@@ -2,86 +2,86 @@
   <el-container class="app-container">
     <el-aside :width="collapsed ? '64px' : '220px'" class="sidebar">
       <div class="brand">
+        <el-icon class="brand-icon" :size="22"><ChatDotRound /></el-icon>
         <span v-if="!collapsed">TG Support Hub</span>
-        <span v-else>TG</span>
       </div>
       <el-scrollbar>
         <el-menu :default-active="route.name" :collapse="collapsed" :collapse-transition="false" router unique-opened>
           <el-menu-item index="dashboard" :route="{ name: 'dashboard' }">
             <el-icon><Odometer /></el-icon>
-            <template #title>仪表盘</template>
+            <template #title>{{ t('menu.dashboard') }}</template>
           </el-menu-item>
 
           <el-menu-item index="accounts" :route="{ name: 'accounts' }">
             <el-icon><User /></el-icon>
-            <template #title>账号管理</template>
+            <template #title>{{ t('menu.accounts') }}</template>
           </el-menu-item>
 
           <el-menu-item index="friends" :route="{ name: 'friends' }">
             <el-icon><Avatar /></el-icon>
-            <template #title>好友列表</template>
+            <template #title>{{ t('menu.friends') }}</template>
           </el-menu-item>
 
           <template v-if="auth.isAdmin">
             <el-menu-item index="business-agents" :route="{ name: 'business-agents' }">
               <el-icon><Briefcase /></el-icon>
-              <template #title>商务代理</template>
+              <template #title>{{ t('menu.business_agents') }}</template>
             </el-menu-item>
 
             <el-menu-item index="merchants" :route="{ name: 'merchants' }">
               <el-icon><Shop /></el-icon>
-              <template #title>商家账号</template>
+              <template #title>{{ t('menu.merchants') }}</template>
             </el-menu-item>
           </template>
 
           <el-menu-item index="account-groups" :route="{ name: 'account-groups' }">
             <el-icon><Collection /></el-icon>
-            <template #title>账号分组</template>
+            <template #title>{{ t('menu.account_groups') }}</template>
           </el-menu-item>
 
           <el-sub-menu index="task-mgmt">
             <template #title>
-              <el-icon><Promotion /></el-icon><span>任务管理</span>
+              <el-icon><Promotion /></el-icon><span>{{ t('menu.task_mgmt') }}</span>
             </template>
-            <el-menu-item index="batch-operations" :route="{ name: 'batch-operations' }">批量操作</el-menu-item>
-            <el-menu-item index="modify-info" :route="{ name: 'modify-info' }">修改资料</el-menu-item>
-            <el-menu-item index="campaigns" :route="{ name: 'campaigns' }">批量群发</el-menu-item>
-            <el-menu-item index="templates" :route="{ name: 'templates' }">消息模板</el-menu-item>
-            <el-menu-item index="replies" :route="{ name: 'replies' }">回复管理</el-menu-item>
+            <el-menu-item index="batch-operations" :route="{ name: 'batch-operations' }">{{ t('menu.batch_operations') }}</el-menu-item>
+            <el-menu-item index="modify-info" :route="{ name: 'modify-info' }">{{ t('menu.modify_info') }}</el-menu-item>
+            <el-menu-item index="campaigns" :route="{ name: 'campaigns' }">{{ t('menu.campaigns') }}</el-menu-item>
+            <el-menu-item index="templates" :route="{ name: 'templates' }">{{ t('menu.templates') }}</el-menu-item>
+            <el-menu-item index="replies" :route="{ name: 'replies' }">{{ t('menu.replies') }}</el-menu-item>
           </el-sub-menu>
 
           <el-menu-item index="task-stats" :route="{ name: 'task-stats' }">
             <el-icon><PieChart /></el-icon>
-            <template #title>任务统计</template>
+            <template #title>{{ t('menu.task_stats') }}</template>
           </el-menu-item>
 
           <template v-if="auth.isAdmin">
             <el-sub-menu index="log-mgmt">
               <template #title>
-                <el-icon><Notebook /></el-icon><span>日志记录</span>
+                <el-icon><Notebook /></el-icon><span>{{ t('menu.log_records') }}</span>
               </template>
-              <el-menu-item index="task-log" :route="{ name: 'task-log' }">任务日志</el-menu-item>
-              <el-menu-item index="io-log" :route="{ name: 'io-log' }">导入导出</el-menu-item>
-              <el-menu-item index="audit-logs" :route="{ name: 'audit-logs' }">审计日志</el-menu-item>
+              <el-menu-item index="task-log" :route="{ name: 'task-log' }">{{ t('menu.task_log') }}</el-menu-item>
+              <el-menu-item index="io-log" :route="{ name: 'io-log' }">{{ t('menu.io_log') }}</el-menu-item>
+              <el-menu-item index="audit-logs" :route="{ name: 'audit-logs' }">{{ t('menu.audit_logs') }}</el-menu-item>
             </el-sub-menu>
 
             <el-sub-menu index="staff-mgmt">
               <template #title>
-                <el-icon><UserFilled /></el-icon><span>客服中心</span>
+                <el-icon><UserFilled /></el-icon><span>{{ t('menu.staff_center') }}</span>
               </template>
-              <el-menu-item index="agents" :route="{ name: 'agents' }">客服列表</el-menu-item>
+              <el-menu-item index="agents" :route="{ name: 'agents' }">{{ t('menu.agents') }}</el-menu-item>
             </el-sub-menu>
           </template>
 
           <el-sub-menu index="data-mgmt">
             <template #title>
-              <el-icon><FolderOpened /></el-icon><span>数据管理</span>
+              <el-icon><FolderOpened /></el-icon><span>{{ t('menu.data_mgmt') }}</span>
             </template>
-            <el-menu-item v-if="auth.isAdmin" index="files" :route="{ name: 'files' }">文件管理</el-menu-item>
-            <el-menu-item index="phones" :route="{ name: 'phones' }">号码数据</el-menu-item>
-            <el-menu-item index="materials" :route="{ name: 'materials' }">文本数据</el-menu-item>
-            <el-menu-item v-if="auth.isAdmin" index="proxies" :route="{ name: 'proxies' }">代理IP管理</el-menu-item>
-            <el-menu-item index="customers" :route="{ name: 'customers' }">客户管理（leads）</el-menu-item>
+            <el-menu-item v-if="auth.isAdmin" index="files" :route="{ name: 'files' }">{{ t('menu.files') }}</el-menu-item>
+            <el-menu-item index="phones" :route="{ name: 'phones' }">{{ t('menu.phones') }}</el-menu-item>
+            <el-menu-item index="materials" :route="{ name: 'materials' }">{{ t('menu.materials') }}</el-menu-item>
+            <el-menu-item v-if="auth.isAdmin" index="proxies" :route="{ name: 'proxies' }">{{ t('menu.proxies') }}</el-menu-item>
+            <el-menu-item index="customers" :route="{ name: 'customers' }">{{ t('menu.customers') }}</el-menu-item>
           </el-sub-menu>
         </el-menu>
       </el-scrollbar>
@@ -99,17 +99,34 @@
           </el-breadcrumb>
 
           <div class="topbar-status">
-            <el-tag v-if="status.has_admin" size="small" type="success">系统已初始化</el-tag>
-            <el-tag size="small" type="info">账号 {{ status.accounts ?? '-' }}</el-tag>
-            <el-tag size="small" type="info">客户 {{ status.customers ?? '-' }}</el-tag>
+            <el-tag v-if="status.has_admin" size="small" type="success">{{ t('common.workers_ok').includes('workers') ? '✓' : '' }}</el-tag>
+            <el-tag size="small" type="info">{{ t('menu.accounts') }} {{ status.accounts ?? '-' }}</el-tag>
+            <el-tag size="small" type="info">{{ t('menu.customers') }} {{ status.customers ?? '-' }}</el-tag>
             <el-tag size="small" :type="status.workersOk ? 'success' : 'warning'">
-              {{ status.workersOk ? 'workers 正常' : 'workers 检查中' }}
+              {{ status.workersOk ? t('common.workers_ok') : t('common.workers_check') }}
             </el-tag>
           </div>
 
           <div class="topbar-spacer" />
 
-          <el-button link @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">
+          <el-button link @click="theme.toggle()" :title="theme.theme === 'dark' ? 'Light' : 'Dark'">
+            <el-icon :size="18"><Sunny v-if="theme.theme === 'dark'" /><Moon v-else /></el-icon>
+          </el-button>
+
+          <el-dropdown @command="onLocaleCommand">
+            <el-button link>
+              <el-icon :size="18"><ChatLineRound /></el-icon>
+              <span class="locale-label">{{ locale === 'zh-CN' ? '中' : 'EN' }}</span>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="zh-CN" :disabled="locale === 'zh-CN'">中文</el-dropdown-item>
+                <el-dropdown-item command="en-US" :disabled="locale === 'en-US'">English</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+
+          <el-button link @click="toggleFullscreen" :title="isFullscreen ? t('common.exit_fullscreen') : t('common.fullscreen')">
             <el-icon :size="18"><FullScreen /></el-icon>
           </el-button>
 
@@ -121,31 +138,39 @@
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="refresh">刷新当前页</el-dropdown-item>
-                <el-dropdown-item command="closeOthers">关闭其他页签</el-dropdown-item>
-                <el-dropdown-item command="closeAll">关闭全部页签</el-dropdown-item>
-                <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+                <el-dropdown-item command="refresh">{{ t('common.refresh_page') }}</el-dropdown-item>
+                <el-dropdown-item command="closeOthers">{{ t('common.close_others') }}</el-dropdown-item>
+                <el-dropdown-item command="closeAll">{{ t('common.close_all') }}</el-dropdown-item>
+                <el-dropdown-item divided command="logout">{{ t('common.logout') }}</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
         </div>
 
         <div class="tabs-row">
-          <el-tabs
-            v-model="tabsStore.active"
-            type="card"
-            closable
-            @tab-click="onTabClick"
-            @tab-remove="onTabRemove"
-          >
-            <el-tab-pane
-              v-for="t in tabsStore.tabs"
-              :key="t.name"
-              :label="t.title"
-              :name="t.name"
-              :closable="t.closable"
-            />
-          </el-tabs>
+          <el-button link class="tab-scroll" :disabled="!canScrollLeft" @click="scrollTabs(-1)">
+            <el-icon><ArrowLeft /></el-icon>
+          </el-button>
+          <div class="tabs-scroll" ref="tabsScrollEl">
+            <el-tabs
+              v-model="tabsStore.active"
+              type="card"
+              closable
+              @tab-click="onTabClick"
+              @tab-remove="onTabRemove"
+            >
+              <el-tab-pane
+                v-for="tab in tabsStore.tabs"
+                :key="tab.name"
+                :label="tab.title"
+                :name="tab.name"
+                :closable="tab.closable"
+              />
+            </el-tabs>
+          </div>
+          <el-button link class="tab-scroll" :disabled="!canScrollRight" @click="scrollTabs(1)">
+            <el-icon><ArrowRight /></el-icon>
+          </el-button>
         </div>
       </el-header>
 
@@ -161,29 +186,38 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useTabsStore } from '@/stores/tabs'
+import { useThemeStore } from '@/stores/theme'
+import { saveLocale } from '@/i18n'
 import http from '@/api/http'
 import {
   Odometer, User, UserFilled, FolderOpened, Promotion,
   Fold, Expand, FullScreen, ArrowDown,
   Collection, Avatar, PieChart, Notebook,
-  Briefcase, Shop,
+  Briefcase, Shop, ChatDotRound, ChatLineRound,
+  Sunny, Moon, ArrowLeft, ArrowRight,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const tabsStore = useTabsStore()
+const theme = useThemeStore()
+const { t, locale } = useI18n()
 
 const collapsed = ref(false)
 const isFullscreen = ref(false)
 const status = reactive({ has_admin: false, accounts: null, customers: null, workersOk: false })
 
-const ROLE_LABELS = { admin: '管理员', supervisor: '主管', agent: '客服' }
-const roleLabel = computed(() => ROLE_LABELS[auth.role] || auth.role || '未登录')
+const roleLabel = computed(() => {
+  if (!auth.role) return ''
+  return t(`common.role_${auth.role}`)
+})
 
 const cachedNames = computed(() => tabsStore.tabs.map((t) => routeNameToComponent(t.name)).filter(Boolean))
 
@@ -243,6 +277,29 @@ function syncFullscreenFlag() {
   isFullscreen.value = !!document.fullscreenElement
 }
 
+function onLocaleCommand(cmd) {
+  if (cmd === locale.value) return
+  locale.value = cmd
+  saveLocale(cmd)
+  ElMessage.success(cmd === 'en-US' ? 'Locale switched. Reload for full effect.' : '语言已切换，部分组件需要刷新页面生效')
+}
+
+const tabsScrollEl = ref(null)
+const canScrollLeft = ref(false)
+const canScrollRight = ref(false)
+function refreshScrollState() {
+  const el = tabsScrollEl.value
+  if (!el) { canScrollLeft.value = false; canScrollRight.value = false; return }
+  canScrollLeft.value = el.scrollLeft > 2
+  canScrollRight.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+}
+function scrollTabs(dir) {
+  const el = tabsScrollEl.value
+  if (!el) return
+  el.scrollBy({ left: dir * 200, behavior: 'smooth' })
+  setTimeout(refreshScrollState, 250)
+}
+
 function onUserCommand(cmd) {
   if (cmd === 'logout') {
     auth.logout()
@@ -280,10 +337,15 @@ async function loadStatus() {
 onMounted(() => {
   loadStatus()
   document.addEventListener('fullscreenchange', syncFullscreenFlag)
+  nextTick(refreshScrollState)
+  window.addEventListener('resize', refreshScrollState)
 })
 onBeforeUnmount(() => {
   document.removeEventListener('fullscreenchange', syncFullscreenFlag)
+  window.removeEventListener('resize', refreshScrollState)
 })
+
+watch(() => tabsStore.tabs.length, () => nextTick(refreshScrollState))
 </script>
 
 <style scoped>
@@ -299,7 +361,9 @@ onBeforeUnmount(() => {
   color: #fff; font-size: 16px; padding: 16px;
   font-weight: 600; letter-spacing: 0.5px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
+  display: flex; align-items: center; gap: 10px;
 }
+.brand-icon { color: #2aabee; }
 :deep(.el-menu) { background: #001628; border-right: none; }
 :deep(.el-menu-item), :deep(.el-sub-menu__title) { color: rgba(255,255,255,0.78); }
 :deep(.el-menu-item:hover), :deep(.el-sub-menu__title:hover) {
@@ -328,7 +392,17 @@ onBeforeUnmount(() => {
 .user-trigger:hover { background: #f5f7fa; }
 .username { color: #555; font-size: 13px; }
 
-.tabs-row { padding: 6px 12px 0; background: #fafafa; }
+.tabs-row {
+  padding: 6px 12px 0; background: #fafafa;
+  display: flex; align-items: center; gap: 4px;
+}
+.tabs-scroll {
+  flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
+}
+.tabs-scroll::-webkit-scrollbar { display: none; }
+.tab-scroll { flex: 0 0 auto; height: 32px; padding: 0 4px; }
+.locale-label { margin-left: 4px; font-size: 12px; }
 :deep(.tabs-row .el-tabs__header) { margin: 0; }
 :deep(.tabs-row .el-tabs__nav) { border: none; }
 :deep(.tabs-row .el-tabs__item) {

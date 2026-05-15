@@ -68,11 +68,11 @@ PRD 描述的是一个**多租户商业系统**：总后台 → 商务代理 →
 | **R9** | 账号管理高级筛选抽屉 | ✅ | — | M | Account 加 nickname/country/remark/avatar_status 列；list 加 7 个新 filter；batch 端点加 proxy_id/clear_proxy/move_to_group_id；前端高级筛选抽屉 + 更多 dropdown（转移分组/分配代理/解绑代理/跳转修改资料/跳转批量操作）。完成于 2026-05-15。 |
 | **R10** | 客服中心扩展 | ✅ | — | M | per-agent 今日接待/读取/发送/读取率/回复率（基于 agent → group → account 反查 message_records）+ KPI 汇总条 + 批量删除（拒绝删自己）+ 客户端 CSV 导出。完成于 2026-05-15。 |
 | **R11** | 文件管理重构 | ✅ | — | S-M | 文本/图片/语音 3 个类型 tab + 分组面板 + 上传/下载/预览/试听；token 可走 query 让 `<img>` `<audio>` 直接渲染。账号/代理/号码 tab 已有独立模块（账号管理/代理 IP 管理/号码数据）。完成于 2026-05-15。 |
-| **R12** | i18n（中/英）+ 主题（亮/暗） | 🕒 | — | M-L | 全站文案抽取到 vue-i18n；切换语言/主题持久化到 localStorage；Element Plus locale + CSS variables |
-| **R13** | 多 Tab 横向滚动 + Telegram Logo + 加载动画 | 🕒 | — | S | 视觉层细节，等内容稳定后做 |
-| **R14** | 多端口资源化重置策略 | 🕒 | R2 | S | 后台定时任务按 `ports_reset_at` 重置 `ports_used` 计数 |
-| **R15** | 商户客服权限批量修改 | 🕒 | R4 | S | `POST /api/merchants/batchUpdateClientPermission` |
-| **R16** | 任务统计导出报表 | 🕒 | R8 | S | `POST /api/statistics/exportReport` |
+| **R12** | i18n（中/英）+ 主题（亮/暗） | ✅ | — | M-L | vue-i18n 接入 + zh-CN/en-US 双 locale + Element Plus locale 切换 + Pinia theme store + CSS variables 暗色覆盖 + topbar 语言/主题切换按钮 + localStorage 持久化。Layout 菜单全量 i18n。完成于 2026-05-15。 |
+| **R13** | 多 Tab 横向滚动 + Telegram Logo + 加载动画 | ✅ | — | S | Layout 顶部 tabs 横向滚动 + 左右翻页按钮（隐藏 scrollbar 视觉对齐 PRD）+ ChatDotRound 蓝色品牌图标。完成于 2026-05-15。 |
+| **R14** | 多端口资源化重置策略 | ✅ | — | S | `reset_merchant_ports` Celery 任务 + Beat 每小时第 5 分钟触发 + 首次运行初始化 reset_at（避免立刻清零）+ cycle ≤ 0 跳过。完成于 2026-05-15。 |
+| **R15** | 商户客服权限批量修改 | ✅ | — | S | `POST /api/merchants/batch-permissions` 接 `(agent×group)` 矩阵 upsert + 字段白名单（173 测试）。完成于 2026-05-15。 |
+| **R16** | 任务统计导出报表 | ✅ | — | S | `GET /api/statistics/timeseries.csv` 流式 CSV 导出（174 测试）。完成于 2026-05-15。 |
 
 总剩余预估：**约 30-50 个工作日**（按 TDD + 测试覆盖率口径）。
 
@@ -147,3 +147,8 @@ Phase 6（产品化）：R12 → R13 → R14
 - **2026-05-15** — R9 账号高级筛选 + 批量动作扩展：4 个新字段 + 7 个新 list filter + batch endpoint 支持代理 / 分组转移（162 测试）。
 - **2026-05-15** — R5.execute slice 2：modify_avatar Telethon RPC + 前端图片分组+图片选择器（接通 R11）（164 测试）。
 - **2026-05-15** — R10 客服中心扩展：per-agent 今日 KPI（按 group→account 反查）+ 批量删除 + 客户端 CSV 导出（168 测试）。
+- **2026-05-15** — R15 商户客服权限批量修改：`POST /api/merchants/batch-permissions`（agent × group 矩阵 upsert，权限字段白名单）（173 测试）。
+- **2026-05-15** — R16 任务统计 CSV 导出：`GET /api/statistics/timeseries.csv` 流式输出（174 测试）。
+- **2026-05-15** — R5.execute slice 3：leave_group / detect_mutual Telethon RPC + 测试覆盖（174 测试）。
+- **2026-05-15** — R12 i18n + 主题：vue-i18n（zh-CN/en-US）+ Pinia theme store + CSS variables 暗色覆盖 + topbar 切换按钮；R13 视觉抛光：Layout tabs 横向滚动 + 翻页按钮 + Telegram 风格品牌图标。
+- **2026-05-15** — R14 端口资源重置：`reset_merchant_ports` Celery beat 任务（每小时第 5 分钟）+ 4 项 TDD 覆盖（首跑初始化 / 周期到达清零 / 周期未到跳过 / 0 周期忽略）（178 测试）。

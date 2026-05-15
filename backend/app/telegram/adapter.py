@@ -335,6 +335,40 @@ class TelegramAdapter:
             await client(functions.account.UpdateUsernameRequest(username=new))
             return OperationResult(ok=True, detail=f"username -> {new}")
 
+        if operation == "leave_group":
+            # Walk the dialog list and leave every channel/megagroup. Basic
+            # legacy chats use messages.DeleteChatUser. Skip private chats
+            # and the user's own saved messages.
+            left = 0
+            async for dialog in client.iter_dialogs():
+                entity = dialog.entity
+                kind = type(entity).__name__
+                try:
+                    if kind in ("Channel",) and getattr(entity, "broadcast", False):
+                        await client(functions.channels.LeaveChannelRequest(channel=entity))
+                        left += 1
+                    elif kind in ("Channel",):  # megagroup
+                        await client(functions.channels.LeaveChannelRequest(channel=entity))
+                        left += 1
+                    elif kind in ("Chat",):
+                        me = await client.get_me()
+                        await client(functions.messages.DeleteChatUserRequest(
+                            chat_id=entity.id, user_id=me.id, revoke_history=False,
+                        ))
+                        left += 1
+                except Exception as exc:  # noqa: BLE001 - telethon can raise many concrete classes
+                    logger.warning("leave_group failed for chat %s: %s", entity.id, exc)
+            return OperationResult(ok=True, detail=f"left {left} groups/channels")
+
+        if operation == "detect_mutual":
+            contacts = await client(functions.contacts.GetContactsRequest(hash=0))
+            users = getattr(contacts, "users", []) or []
+            mutual = [u for u in users if getattr(u, "mutual_contact", False)]
+            return OperationResult(
+                ok=True,
+                detail=f"{len(mutual)} mutual / {len(users)} total contacts",
+            )
+
         if operation == "modify_avatar":
             file_path = params.get("file_path")
             if not file_path:

@@ -5,7 +5,7 @@
       <el-button type="primary" @click="load">查询</el-button>
       <el-button type="primary" @click="openDialog">+ 新增</el-button>
       <el-button :loading="loading" @click="load">刷新</el-button>
-      <span class="hint">已支持执行：删除好友 / 退出其他设备。点「启动」即下发到 worker；其他类型仍待 Telethon RPC 接入。</span>
+      <span class="hint">已支持执行：删除好友 / 退出群聊 / 检测双向 / 退出其他设备。仅申诉解双向待实现（Telegram 无公开 RPC）。</span>
     </div>
 
     <el-table :data="filteredRows" v-loading="loading" stripe size="small">

@@ -36,6 +36,10 @@ celery_app.conf.beat_schedule = {
         "task": "backend.app.workers.send_tasks.reset_daily_quota",
         "schedule": crontab(minute="0", hour="0"),
     },
+    "reset-merchant-ports-hourly": {
+        "task": "backend.app.workers.account_tasks.reset_merchant_ports",
+        "schedule": crontab(minute="5"),
+    },
 }
 
 celery_app.autodiscover_tasks(["backend.app.workers"])

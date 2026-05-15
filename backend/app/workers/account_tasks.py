@@ -4,12 +4,15 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
+from datetime import timedelta
+
 from sqlalchemy import select
 
 from backend.app.core.database import SessionLocal
 from backend.app.models.account import Account, AccountGroupMember
 from backend.app.models.customer import Friend
 from backend.app.models.proxy import ProxyEndpoint
+from backend.app.models.tenant import Merchant
 from backend.app.services.proxy_checker import check_tcp
 from backend.app.telegram.adapter import get_adapter
 from backend.app.workers.celery_app import celery_app
@@ -147,3 +150,42 @@ async def _sync_account_friends(account_id: int) -> int:
 def sync_account_friends(account_id: int) -> dict:
     upserted = asyncio.run(_sync_account_friends(account_id))
     return {"account_id": account_id, "upserted": upserted}
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+@celery_app.task(name="backend.app.workers.account_tasks.reset_merchant_ports")
+def reset_merchant_ports() -> dict:
+    """Zero out `ports_used` for merchants whose reset cycle has elapsed.
+
+    PRD section 15.1-15.2: each merchant has a configurable port cycle
+    (default 24h). When the wall-clock distance from `ports_reset_at`
+    exceeds the cycle, counters reset and the timestamp advances.
+    """
+    now = datetime.now(UTC)
+    reset = 0
+    initialized = 0
+    with SessionLocal() as db:
+        merchants = list(db.scalars(select(Merchant)))
+        for m in merchants:
+            cycle_h = m.ports_reset_cycle_hours or 0
+            if cycle_h <= 0:
+                continue
+            last = _parse_iso(m.ports_reset_at)
+            if last is None:
+                m.ports_reset_at = now.isoformat()
+                initialized += 1
+                continue
+            if now - last >= timedelta(hours=cycle_h):
+                m.ports_used = 0
+                m.ports_reset_at = now.isoformat()
+                reset += 1
+        db.commit()
+    return {"reset": reset, "initialized": initialized}

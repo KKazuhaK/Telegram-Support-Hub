@@ -1,0 +1,64 @@
+/* Light/dark theme overrides applied on <html data-theme="..."> */
+
+html[data-theme='light'] {
+  --tg-bg: #f5f7fa;
+  --tg-surface: #ffffff;
+  --tg-border: #e5e6eb;
+  --tg-text: #1f2329;
+  --tg-text-soft: #555;
+  --tg-sidebar-bg: #001628;
+  --tg-sidebar-sub-bg: #00111f;
+  --tg-sidebar-text: rgba(255, 255, 255, 0.78);
+  --tg-tabs-bg: #fafafa;
+}
+
+html[data-theme='dark'] {
+  --tg-bg: #14181f;
+  --tg-surface: #1e242c;
+  --tg-border: #2a313a;
+  --tg-text: #d6d8dc;
+  --tg-text-soft: #a8adb5;
+  --tg-sidebar-bg: #0b1218;
+  --tg-sidebar-sub-bg: #060a0e;
+  --tg-sidebar-text: rgba(255, 255, 255, 0.78);
+  --tg-tabs-bg: #181d24;
+
+  color-scheme: dark;
+}
+
+html[data-theme='dark'] body {
+  background: var(--tg-bg);
+  color: var(--tg-text);
+}
+
+html[data-theme='dark'] .el-card,
+html[data-theme='dark'] .el-dialog,
+html[data-theme='dark'] .el-drawer {
+  background: var(--tg-surface);
+  color: var(--tg-text);
+  border-color: var(--tg-border);
+}
+
+html[data-theme='dark'] .el-table,
+html[data-theme='dark'] .el-table tr,
+html[data-theme='dark'] .el-table th.el-table__cell {
+  background: var(--tg-surface) !important;
+  color: var(--tg-text);
+}
+
+html[data-theme='dark'] .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: #232a33 !important;
+}
+
+html[data-theme='dark'] .el-input__wrapper,
+html[data-theme='dark'] .el-textarea__inner,
+html[data-theme='dark'] .el-select__wrapper {
+  background: #262d36 !important;
+  box-shadow: 0 0 0 1px var(--tg-border) inset !important;
+  color: var(--tg-text);
+}
+
+html[data-theme='dark'] .el-pagination,
+html[data-theme='dark'] .el-form-item__label {
+  color: var(--tg-text);
+}

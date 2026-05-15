@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from backend.app.api.deps import AdminDep, CurrentUserDep, DbSession
 from backend.app.core.security import hash_password
+from backend.app.models.agent import SupportAgent, SupportAgentGroupPermission
 from backend.app.models.tenant import BusinessAgent, Merchant
 from backend.app.services.audit import write_audit
 from backend.app.services.serializers import to_dict
@@ -41,6 +42,16 @@ class MerchantUpdate(BaseModel):
 class MerchantBatch(BaseModel):
     ids: list[int] = Field(min_length=1)
     status: bool | None = None
+
+
+class MerchantBatchPermissions(BaseModel):
+    """Bulk-grant a permission profile to a cartesian product of agents
+    and account-groups, scoped under merchants for audit/grouping purposes
+    (the actual permission table is the same global one)."""
+    merchant_ids: list[int] = Field(default_factory=list)
+    agent_ids: list[int] = Field(min_length=1)
+    account_group_ids: list[int] = Field(min_length=1)
+    permissions: dict
 
 
 def _public(row: Merchant) -> dict:
@@ -125,6 +136,50 @@ def delete_merchant(merchant_id: int, db: DbSession, admin: AdminDep) -> dict:
                 target_type="merchant", target_id=merchant_id)
     db.commit()
     return {"deleted": True}
+
+
+@router.post("/batch-permissions")
+def batch_permissions(payload: MerchantBatchPermissions, db: DbSession, admin: AdminDep) -> dict:
+    """For each (agent_id × account_group_id) pair, upsert the permission
+    row with the supplied flag values. PRD section 7.1's
+    『批量修改客服权限』 button drives this."""
+    allowed = {
+        "can_view_friends", "can_view_chats", "can_send_message",
+        "can_broadcast", "can_edit_profile", "can_delete_friend",
+        "can_clear_chat", "can_export_data",
+    }
+    perms = {k: bool(v) for k, v in payload.permissions.items() if k in allowed}
+    if not perms:
+        raise HTTPException(status_code=400, detail="permissions 至少需要一个有效字段")
+
+    created = 0
+    updated = 0
+    for agent_id in payload.agent_ids:
+        for group_id in payload.account_group_ids:
+            existing = db.scalar(select(SupportAgentGroupPermission).where(
+                SupportAgentGroupPermission.agent_id == agent_id,
+                SupportAgentGroupPermission.account_group_id == group_id,
+            ))
+            if existing:
+                for k, v in perms.items():
+                    setattr(existing, k, v)
+                updated += 1
+            else:
+                db.add(SupportAgentGroupPermission(
+                    agent_id=agent_id, account_group_id=group_id, **perms,
+                ))
+                created += 1
+
+    write_audit(db, actor=admin, action="merchant.batch_permissions",
+                detail={
+                    "merchants": payload.merchant_ids,
+                    "agents": payload.agent_ids,
+                    "groups": payload.account_group_ids,
+                    "permissions": perms,
+                    "created": created, "updated": updated,
+                })
+    db.commit()
+    return {"created": created, "updated": updated}
 
 
 @router.post("/batch")
