@@ -26,6 +26,10 @@ class SupportAgentUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=8, max_length=200)
 
 
+class SupportAgentBatchDelete(BaseModel):
+    ids: list[int] = Field(min_length=1)
+
+
 class GroupPermissionInput(BaseModel):
     account_group_id: int
     can_view_friends: bool = True
@@ -63,6 +67,22 @@ def create_agent(payload: SupportAgentCreate, db: DbSession, admin: AdminDep) ->
     db.commit()
     db.refresh(agent)
     return to_dict(agent)
+
+
+@router.delete("/batch")
+def batch_delete_agents(payload: SupportAgentBatchDelete, db: DbSession, admin: AdminDep) -> dict:
+    if admin.agent_id in payload.ids:
+        raise HTTPException(status_code=400, detail="不能删除当前登录的账号")
+    db.execute(delete(SupportAgentGroupPermission).where(
+        SupportAgentGroupPermission.agent_id.in_(payload.ids)
+    ))
+    rows = list(db.scalars(select(SupportAgent).where(SupportAgent.id.in_(payload.ids))))
+    for r in rows:
+        db.delete(r)
+    write_audit(db, actor=admin, action="agent.batch_delete",
+                detail={"ids": payload.ids, "count": len(rows)})
+    db.commit()
+    return {"deleted": len(rows)}
 
 
 @router.patch("/{agent_id}")

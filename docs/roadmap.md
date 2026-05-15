@@ -66,7 +66,7 @@ PRD 描述的是一个**多租户商业系统**：总后台 → 商务代理 →
 | **R7** | 任务日志页 | ✅ | — | M | audit_logs 加 `action_prefix` 过滤；前端 任务日志（基于 message-details）+ 导入导出 两页 + 日志记录 子菜单 3 项。客户端 CSV 导出。完成于 2026-05-15。 |
 | **R8** | 任务统计图表 | ✅ | — | M | 后端 `/api/statistics/{timeseries,message-details}`；前端 ECharts 柱+折线图 + 5 项汇总徽章 + 时段缩略 + 状态/任务/账号/日期筛选；维度对比保留。完成于 2026-05-15。剩 R16 导出报表。 |
 | **R9** | 账号管理高级筛选抽屉 | ✅ | — | M | Account 加 nickname/country/remark/avatar_status 列；list 加 7 个新 filter；batch 端点加 proxy_id/clear_proxy/move_to_group_id；前端高级筛选抽屉 + 更多 dropdown（转移分组/分配代理/解绑代理/跳转修改资料/跳转批量操作）。完成于 2026-05-15。 |
-| **R10** | 客服中心扩展 | 🚧 | R1 / R3 | M | 今日接待/读取/发送/读取率/回复率实时指标；"打开客服页面"跳转 client 子域；批量新增、批量导出、批量删除 |
+| **R10** | 客服中心扩展 | ✅ | — | M | per-agent 今日接待/读取/发送/读取率/回复率（基于 agent → group → account 反查 message_records）+ KPI 汇总条 + 批量删除（拒绝删自己）+ 客户端 CSV 导出。完成于 2026-05-15。 |
 | **R11** | 文件管理重构 | ✅ | — | S-M | 文本/图片/语音 3 个类型 tab + 分组面板 + 上传/下载/预览/试听；token 可走 query 让 `<img>` `<audio>` 直接渲染。账号/代理/号码 tab 已有独立模块（账号管理/代理 IP 管理/号码数据）。完成于 2026-05-15。 |
 | **R12** | i18n（中/英）+ 主题（亮/暗） | 🕒 | — | M-L | 全站文案抽取到 vue-i18n；切换语言/主题持久化到 localStorage；Element Plus locale + CSS variables |
 | **R13** | 多 Tab 横向滚动 + Telegram Logo + 加载动画 | 🕒 | — | S | 视觉层细节，等内容稳定后做 |
@@ -146,3 +146,4 @@ Phase 6（产品化）：R12 → R13 → R14
 - **2026-05-15** — R5.execute slice 1：execute_operation worker + 5 个 Telethon RPC（delete_friend / leave_other_devices / modify_nickname / signature / username）；campaign.start 钩入任务派发（158 测试）。
 - **2026-05-15** — R9 账号高级筛选 + 批量动作扩展：4 个新字段 + 7 个新 list filter + batch endpoint 支持代理 / 分组转移（162 测试）。
 - **2026-05-15** — R5.execute slice 2：modify_avatar Telethon RPC + 前端图片分组+图片选择器（接通 R11）（164 测试）。
+- **2026-05-15** — R10 客服中心扩展：per-agent 今日 KPI（按 group→account 反查）+ 批量删除 + 客户端 CSV 导出（168 测试）。

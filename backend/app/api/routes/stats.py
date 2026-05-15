@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from backend.app.api.deps import CurrentUserDep, DbSession
 from backend.app.models.account import Account, AccountGroup, AccountGroupMember
-from backend.app.models.agent import SupportAgent
+from backend.app.models.agent import SupportAgent, SupportAgentGroupPermission
 from backend.app.models.campaign import Campaign
 from backend.app.models.customer import Customer, Friend
 from backend.app.models.message import MessageRecord
@@ -137,10 +137,43 @@ def per_group_stats(db: DbSession, _: CurrentUserDep) -> list[dict]:
 @router.get("/support-agents")
 def per_agent_stats(db: DbSession, _: CurrentUserDep) -> list[dict]:
     seven_days_ago = (datetime.now(UTC) - timedelta(days=7)).isoformat()
+    today_prefix = _today_iso_prefix()
     agents = list(db.scalars(select(SupportAgent).order_by(SupportAgent.id.asc())))
+
+    # Pre-load (agent_id, account_ids) so we don't issue 1+N queries.
+    perm_rows = list(db.scalars(select(SupportAgentGroupPermission)))
+    group_to_accounts: dict[int, list[int]] = {}
+    for gid, in db.execute(select(AccountGroupMember.group_id).distinct()).all():
+        group_to_accounts[gid] = [m.account_id for m in db.scalars(
+            select(AccountGroupMember).where(AccountGroupMember.group_id == gid)
+        )]
+    agent_accounts: dict[int, set[int]] = {}
+    for p in perm_rows:
+        bucket = agent_accounts.setdefault(p.agent_id, set())
+        bucket.update(group_to_accounts.get(p.account_group_id, []))
+
     out = []
     for agent in agents:
         recent_login = agent.last_login_at and agent.last_login_at >= seven_days_ago
+        acc_ids = agent_accounts.get(agent.id, set())
+        if acc_ids:
+            today_sent = count(
+                db, MessageRecord,
+                MessageRecord.account_id.in_(acc_ids),
+                MessageRecord.sent_at.like(f"{today_prefix}%"),
+            )
+            today_replied = count(
+                db, MessageRecord,
+                MessageRecord.account_id.in_(acc_ids),
+                MessageRecord.replied_at.like(f"{today_prefix}%"),
+            )
+            today_read = count(
+                db, MessageRecord,
+                MessageRecord.account_id.in_(acc_ids),
+                MessageRecord.read_at.like(f"{today_prefix}%"),
+            )
+        else:
+            today_sent = today_replied = today_read = 0
         out.append({
             "agent_id": agent.id,
             "username": agent.username,
@@ -150,6 +183,11 @@ def per_agent_stats(db: DbSession, _: CurrentUserDep) -> list[dict]:
             "online_status": agent.online_status,
             "last_login_at": agent.last_login_at,
             "active_last_7d": bool(recent_login),
+            "today_sent": today_sent,
+            "today_replied": today_replied,
+            "today_read": today_read,
+            "today_reply_rate": (today_replied / today_sent) if today_sent else 0.0,
+            "today_read_rate": (today_read / today_sent) if today_sent else 0.0,
         })
     return out
 
