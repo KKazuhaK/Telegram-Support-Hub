@@ -160,7 +160,7 @@ async function load() {
   loading.value = true
   try {
     const [{ data: r }, { data: g }, { data: t }] = await Promise.all([
-      http.get('/campaigns'),
+      http.get('/campaigns', { params: { task_kind: 'broadcast' } }),
       http.get('/account-groups'),
       http.get('/message-templates'),
     ])

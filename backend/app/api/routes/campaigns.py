@@ -19,7 +19,30 @@ from backend.app.services.template_renderer import render_template
 
 router = APIRouter()
 
-ALLOWED_TARGET_TYPES = {"customer_broadcast", "friend_broadcast", "imported_target_broadcast"}
+# Operation target whitelists per task_kind. Keeps the schema strict so a
+# typo or stale UI field gets a useful 400 instead of being silently saved.
+ALLOWED_OPS = {
+    "broadcast": {"customer_broadcast", "friend_broadcast", "imported_target_broadcast"},
+    "batch_op": {
+        "delete_friend", "leave_group", "detect_mutual",
+        "leave_other_devices", "appeal_mutual",
+    },
+    "modify_info": {
+        "modify_password", "modify_avatar", "modify_nickname",
+        "modify_username", "modify_signature",
+    },
+}
+# Legacy alias.
+ALLOWED_TARGET_TYPES = ALLOWED_OPS["broadcast"]
+
+# Per-operation required keys in extra_params. modify_avatar will later need
+# file_group_id once file groups land; today the validator only enforces the
+# "needs a new value" set.
+EXTRA_PARAMS_REQUIRED = {
+    "modify_nickname": ("new_value",),
+    "modify_username": ("new_value",),
+    "modify_signature": ("new_value",),
+}
 
 
 class SendSettings(BaseModel):
@@ -37,12 +60,19 @@ class SendSettings(BaseModel):
 
 class CampaignCreate(BaseModel):
     name: str
-    template_id: int
+    # template_id is optional now: batch_op / modify_info do not need one.
+    template_id: int | None = None
+    # task_kind defaults to broadcast for backwards-compat with pre-R5 callers.
+    task_kind: str = "broadcast"
+    # operation_target / target_type are dual-spelled — accept either; we
+    # mirror them on save.
+    operation_target: str | None = None
     target_type: str = "customer_broadcast"
     account_group_ids: list[int] = Field(default_factory=list)
     customer_ids: list[int] | None = None
     friend_ids: list[int] | None = None
     imported_targets: list[dict] | None = None
+    extra_params: dict | None = None
     send_settings: SendSettings = Field(default_factory=SendSettings)
 
 
@@ -124,33 +154,90 @@ def _build_friend_records(db, campaign: Campaign, template: MessageTemplate, gro
 
 
 @router.get("")
-def list_campaigns(db: DbSession, user: CurrentUserDep, limit: int = 100, offset: int = 0) -> list[dict]:
-    stmt = select(Campaign).order_by(Campaign.id.desc()).offset(offset).limit(limit)
-    return list_dict(list(db.scalars(stmt)))
+def list_campaigns(
+    db: DbSession, user: CurrentUserDep,
+    task_kind: str | None = None,
+    limit: int = 100, offset: int = 0,
+) -> list[dict]:
+    stmt = select(Campaign).order_by(Campaign.id.desc())
+    if task_kind:
+        stmt = stmt.where(Campaign.task_kind == task_kind)
+    return list_dict(list(db.scalars(stmt.offset(offset).limit(limit))))
+
+
+def _resolve_operation_target(payload: CampaignCreate) -> str:
+    """Both new (operation_target) and legacy (target_type) shapes are
+    accepted. Returns the canonical op string after consistency check."""
+    op = payload.operation_target or payload.target_type
+    if payload.task_kind not in ALLOWED_OPS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"task_kind 必须是 {sorted(ALLOWED_OPS)} 之一",
+        )
+    allowed = ALLOWED_OPS[payload.task_kind]
+    if op not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{payload.task_kind} 的 operation_target 必须是 {sorted(allowed)} 之一",
+        )
+    return op
+
+
+def _validate_extra_params(op: str, extra: dict | None) -> None:
+    required = EXTRA_PARAMS_REQUIRED.get(op)
+    if not required:
+        return
+    extra = extra or {}
+    missing = [k for k in required if not extra.get(k)]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{op} 缺少必填参数：{missing}",
+        )
+
+
+def _eligible_account_count(db: DbSession, group_ids: list[int]) -> int:
+    """How many enabled+active accounts live in the chosen groups —
+    used as `target_count` for batch_op / modify_info kinds where we don't
+    queue per-customer message rows."""
+    from backend.app.models.account import Account, AccountGroupMember
+    if not group_ids:
+        return 0
+    member_subq = select(AccountGroupMember.account_id).where(AccountGroupMember.group_id.in_(group_ids))
+    stmt = (
+        select(Account)
+        .where(Account.enabled.is_(True))
+        .where(Account.status.in_(["active", "imported"]))
+        .where(Account.id.in_(member_subq))
+    )
+    return len(list(db.scalars(stmt)))
 
 
 @router.post("")
 def create_campaign(payload: CampaignCreate, db: DbSession, user: CurrentUserDep) -> dict:
     _require_broadcast(user)
-    if payload.target_type not in ALLOWED_TARGET_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"任务类型必须是 {sorted(ALLOWED_TARGET_TYPES)} 之一",
-        )
-
-    template = db.get(MessageTemplate, payload.template_id)
-    if not template or not template.enabled:
-        raise HTTPException(status_code=400, detail="模板不存在或已禁用")
-
+    op = _resolve_operation_target(payload)
+    _validate_extra_params(op, payload.extra_params)
     group_ids = _scope_groups(user, payload.account_group_ids)
+
+    template: MessageTemplate | None = None
+    if payload.task_kind == "broadcast":
+        if payload.template_id is None:
+            raise HTTPException(status_code=400, detail="群发任务必须选择模板")
+        template = db.get(MessageTemplate, payload.template_id)
+        if not template or not template.enabled:
+            raise HTTPException(status_code=400, detail="模板不存在或已禁用")
 
     campaign = Campaign(
         name=payload.name,
-        template_id=template.id,
+        template_id=template.id if template else None,
         status="queued",
-        target_type=payload.target_type,
+        task_kind=payload.task_kind,
+        operation_target=op,
+        target_type=op,
         account_group_ids=group_ids,
         send_settings=payload.send_settings.model_dump(),
+        extra_params=payload.extra_params or None,
         target_count=0,
         queued_count=0,
         created_by=user.username,
@@ -159,21 +246,32 @@ def create_campaign(payload: CampaignCreate, db: DbSession, user: CurrentUserDep
     db.flush()
 
     now_iso = datetime.now(UTC).isoformat()
-    if payload.target_type == "customer_broadcast":
-        count = _build_customer_records(db, campaign, template, payload.customer_ids, now_iso)
-    elif payload.target_type == "friend_broadcast":
-        count = _build_friend_records(db, campaign, template, group_ids, payload.friend_ids, now_iso)
-    else:  # imported_target_broadcast
-        count = build_imported_target_records(db, campaign, template, group_ids, payload.imported_targets or [])
-
-    if count == 0:
-        db.rollback()
-        raise HTTPException(status_code=400, detail="没有满足条件的目标，请检查授权状态/分配/好友列表")
+    if payload.task_kind == "broadcast":
+        if op == "customer_broadcast":
+            count = _build_customer_records(db, campaign, template, payload.customer_ids, now_iso)
+        elif op == "friend_broadcast":
+            count = _build_friend_records(db, campaign, template, group_ids, payload.friend_ids, now_iso)
+        else:  # imported_target_broadcast
+            count = build_imported_target_records(db, campaign, template, group_ids, payload.imported_targets or [])
+        if count == 0:
+            db.rollback()
+            raise HTTPException(status_code=400, detail="没有满足条件的目标，请检查授权状态/分配/好友列表")
+    else:
+        # batch_op / modify_info: no per-target message rows queued today.
+        # Execution will iterate the eligible accounts directly. Record the
+        # count up-front so the UI shows the expected size.
+        count = _eligible_account_count(db, group_ids)
+        if count == 0:
+            db.rollback()
+            raise HTTPException(status_code=400, detail="所选分组下没有可用账号")
 
     campaign.target_count = count
-    campaign.queued_count = count
+    campaign.queued_count = count if payload.task_kind == "broadcast" else 0
     write_audit(db, actor=user, action="campaign.create", target_type="campaign",
-                target_id=campaign.id, detail={"target_type": payload.target_type, "queued": count, "groups": group_ids})
+                target_id=campaign.id, detail={
+                    "task_kind": payload.task_kind, "operation_target": op,
+                    "groups": group_ids, "target_count": count,
+                })
     db.commit()
     db.refresh(campaign)
     return to_dict(campaign)

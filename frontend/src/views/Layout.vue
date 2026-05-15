@@ -43,6 +43,8 @@
             <template #title>
               <el-icon><Promotion /></el-icon><span>任务管理</span>
             </template>
+            <el-menu-item index="batch-operations" :route="{ name: 'batch-operations' }">批量操作</el-menu-item>
+            <el-menu-item index="modify-info" :route="{ name: 'modify-info' }">修改资料</el-menu-item>
             <el-menu-item index="campaigns" :route="{ name: 'campaigns' }">批量群发</el-menu-item>
             <el-menu-item index="templates" :route="{ name: 'templates' }">消息模板</el-menu-item>
             <el-menu-item index="replies" :route="{ name: 'replies' }">回复管理</el-menu-item>
@@ -192,6 +194,7 @@ function routeNameToComponent(name) {
 }
 
 const PARENT = {
+  'batch-operations': '任务管理', 'modify-info': '任务管理',
   campaigns: '任务管理', templates: '任务管理', replies: '任务管理',
   'audit-logs': '日志记录',
   agents: '客服中心',

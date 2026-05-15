@@ -61,7 +61,7 @@ PRD 描述的是一个**多租户商业系统**：总后台 → 商务代理 →
 | **R2** | 端口资源 / 配额 | 🕒 | R1 | M | merchants 表带 `ports_total / ports_used / ports_expires_at / ports_reset_at`；账号上线时校验端口；过期自动锁号 |
 | **R3** | 商务代理 CRUD UI | 🚧 | R1 | M | 列表 + 新增/编辑（名称、密码、昵称、平台、Logo、域名、备注、状态）；列表筛选 |
 | **R4** | 商家账号 CRUD UI | 🚧 | R1 + R2 | M | 列表 + 新增/编辑 + 批量改客服权限；端口配额可视 |
-| **R5** | 任务管理三件套字段全量化 | 🚧 | — | L | 把 campaigns 拆为 `批量操作 / 修改资料 / 批量群发` 3 个独立 target_type 簇，每个的 PRD 字段（操作对象下拉、文件分组、来源、可选项-添加联系人、消息类型、模板变量）全部落到表单和后端 |
+| **R5** | 任务管理三件套字段全量化 | 🚧 | — | L | **数据层 ✅ 2026-05-15**：Campaign 加 task_kind/operation_target/extra_params；3 个独立任务簇 + 5 个批量操作 + 5 个修改资料类型可建可查；后端验证 + 3 个前端页 + 侧栏 3 项。**剩余 R5.execute**：批量操作 / 修改资料的真实执行 worker（需要 Telethon 调用 deleteFriend / leaveGroup / setProfile 等 RPC） |
 | **R6** | 消息模板变量系统 | ✅ | — | M | 15+ 变量渲染 + 富文本 entity（UTF-16 offset 准确）+ 预览 API + 模板页双栏帮助。完成于 2026-05-15。 |
 | **R7** | 任务日志页 | 🕒 | — | M | 现有 audit_logs 拆 view：`/log/record`（按任务）和 `/log/inout`（导入导出记录）；按日期/状态/账号/任务 ID 筛选 + 导出 |
 | **R8** | 任务统计图表 | 🚧 | — | M | 现有 task-stats 加 Tab：`统计详情`（表格 + 导出）与 `统计报表`（折线柱图 + 5 项汇总徽章），用 ECharts |
@@ -138,3 +138,4 @@ Phase 6（产品化）：R12 → R13 → R14
 - **2026-05-15** — 路线图建立。当前 85 个测试全过，已完成数据管理三子页 + 多页签 Layout + 文件管理。
 - **2026-05-15** — R1 落地：BusinessAgent + Merchant 实体 + 端口字段 + 后台页面（92 测试）。
 - **2026-05-15** — R6 落地：模板变量引擎（UTF-16 entity offset 准确） + 端到端接入 send_worker + 预览 UI（117 测试）。
+- **2026-05-15** — R5 数据层落地：Campaign.task_kind/operation_target/extra_params + 3 个任务簇 + 严格枚举校验 + 前端 3 页 + 任务管理子菜单 3 项（122 测试）。R5.execute（实际执行）留下一个迭代。

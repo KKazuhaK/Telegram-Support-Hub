@@ -16,6 +16,8 @@ const routes = [
       { path: 'merchants', name: 'merchants', component: () => import('@/views/Merchants.vue'), meta: { title: '商家账号', adminOnly: true } },
 
       // 任务管理
+      { path: 'batch-operations', name: 'batch-operations', component: () => import('@/views/BatchOperations.vue'), meta: { title: '批量操作' } },
+      { path: 'modify-info', name: 'modify-info', component: () => import('@/views/ModifyInfo.vue'), meta: { title: '修改资料' } },
       { path: 'campaigns', name: 'campaigns', component: () => import('@/views/Campaigns.vue'), meta: { title: '批量群发' } },
       { path: 'templates', name: 'templates', component: () => import('@/views/Templates.vue'), meta: { title: '消息模板' } },
       { path: 'replies', name: 'replies', component: () => import('@/views/Replies.vue'), meta: { title: '回复管理' } },

@@ -55,6 +55,12 @@ def _send_via_adapter(
 
 @celery_app.task(name="backend.app.workers.send_tasks.dispatch_send_queue")
 def dispatch_send_queue(limit: int | None = None) -> dict:
+    """Pump the message-record queue for broadcast tasks.
+
+    Note: batch_op / modify_info campaigns (R5) create no MessageRecord rows
+    so they are naturally skipped here. Their execution path will arrive
+    as a separate Celery task family in R5.execute (TODO).
+    """
     limit = int(limit or settings.dispatch_batch_size)
     processed = 0
     sent_ok = 0
