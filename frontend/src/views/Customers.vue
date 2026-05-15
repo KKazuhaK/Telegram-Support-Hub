@@ -34,8 +34,47 @@
       <el-table-column prop="status" label="状态" width="120" />
       <el-table-column prop="assigned_account_id" label="分配账号" width="100" />
       <el-table-column prop="last_reply_text" label="最近回复" show-overflow-tooltip />
+      <el-table-column label="操作" width="140">
+        <template #default="{ row }">
+          <el-button size="small" link @click="openEditDialog(row)">编辑</el-button>
+          <el-popconfirm title="确认删除该客户？" @confirm="deleteCustomer(row)">
+            <template #reference>
+              <el-button size="small" link type="danger">删除</el-button>
+            </template>
+          </el-popconfirm>
+        </template>
+      </el-table-column>
     </el-table>
   </el-card>
+
+  <el-dialog v-model="editDialog" title="编辑客户" width="520px">
+    <el-form :model="editForm" label-width="100px">
+      <el-form-item label="手机号">
+        <el-input v-model="editForm.phone" disabled />
+      </el-form-item>
+      <el-form-item label="姓名"><el-input v-model="editForm.name" /></el-form-item>
+      <el-form-item label="标签">
+        <el-input
+          :model-value="(editForm.tags || []).join('|')"
+          placeholder="多个标签用 | 分隔"
+          @input="(v) => (editForm.tags = v.split('|').map((s) => s.trim()).filter(Boolean))"
+        />
+      </el-form-item>
+      <el-form-item label="来源"><el-input v-model="editForm.source" /></el-form-item>
+      <el-form-item label="授权">
+        <el-switch v-model="editForm.consent" />
+      </el-form-item>
+      <el-form-item label="状态">
+        <el-select v-model="editForm.status" style="width: 100%">
+          <el-option v-for="s in statuses" :key="s" :label="s" :value="s" />
+        </el-select>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="editDialog = false">取消</el-button>
+      <el-button type="primary" :loading="saving" @click="saveEdit">保存</el-button>
+    </template>
+  </el-dialog>
 
   <el-dialog v-model="importDialog" title="导入客户" width="560px">
     <el-form :model="importForm" label-width="100px">
@@ -117,6 +156,13 @@ const importForm = reactive({
   assume_consent: false,
   account_group_ids: [],
   max_per_account: 0,
+})
+
+const editDialog = ref(false)
+const saving = ref(false)
+const editForm = reactive({
+  id: null, phone: '', name: '', tags: [], source: '',
+  consent: false, status: 'new',
 })
 
 const assignDialog = ref(false)
@@ -202,6 +248,42 @@ async function doAssign() {
     selectedRows.value = []
     await load()
   } finally { assigning.value = false }
+}
+
+function openEditDialog(row) {
+  Object.assign(editForm, {
+    id: row.id,
+    phone: row.phone,
+    name: row.name || '',
+    tags: Array.isArray(row.tags) ? [...row.tags] : [],
+    source: row.source || '',
+    consent: !!row.consent,
+    status: row.status || 'new',
+  })
+  editDialog.value = true
+}
+
+async function saveEdit() {
+  saving.value = true
+  try {
+    const payload = {
+      name: editForm.name || null,
+      tags: editForm.tags,
+      source: editForm.source || null,
+      consent: editForm.consent,
+      status: editForm.status,
+    }
+    await http.patch(`/customers/${editForm.id}`, payload)
+    ElMessage.success('已保存')
+    editDialog.value = false
+    await load()
+  } finally { saving.value = false }
+}
+
+async function deleteCustomer(row) {
+  await http.delete(`/customers/${row.id}`)
+  ElMessage.success(`已删除 ${row.phone}`)
+  await load()
 }
 
 async function exportCsv() {

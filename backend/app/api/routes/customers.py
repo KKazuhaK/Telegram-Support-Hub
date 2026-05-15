@@ -31,6 +31,18 @@ class CustomerAssign(BaseModel):
     only_unassigned: bool = True
 
 
+class CustomerUpdate(BaseModel):
+    """Editable fields. phone is deliberately not here — it's the dedup key
+    and changing it would break audit trails and template-rendered messages
+    that already captured the old phone in body_snapshot."""
+    name: str | None = None
+    tags: list[str] | None = None
+    source: str | None = None
+    consent: bool | None = None
+    status: str | None = None
+    assigned_account_id: int | None = None
+
+
 def _scope_accounts_to_user(db, user, account_group_ids: list[int] | None) -> list[int] | None:
     if user.is_admin:
         return account_group_ids
@@ -105,6 +117,40 @@ def import_customers(payload: CustomerImport, db: DbSession, user: CurrentUserDe
         "rejected": rejected,
         "assignment": assignment,
     }
+
+
+@router.patch("/{customer_id}")
+def update_customer(
+    customer_id: int, payload: CustomerUpdate, db: DbSession, user: CurrentUserDep,
+) -> dict:
+    if not (user.is_admin or user.can("can_broadcast")):
+        raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
+    row = db.get(Customer, customer_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="客户不存在")
+    values = payload.model_dump(exclude_unset=True)
+    for key, value in values.items():
+        setattr(row, key, value)
+    write_audit(db, actor=user, action="customer.update",
+                target_type="customer", target_id=row.id, detail=values)
+    db.commit()
+    db.refresh(row)
+    return to_dict(row)
+
+
+@router.delete("/{customer_id}")
+def delete_customer(customer_id: int, db: DbSession, user: CurrentUserDep) -> dict:
+    if not (user.is_admin or user.can("can_broadcast")):
+        raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
+    row = db.get(Customer, customer_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="客户不存在")
+    db.delete(row)
+    write_audit(db, actor=user, action="customer.delete",
+                target_type="customer", target_id=customer_id,
+                detail={"phone": row.phone})
+    db.commit()
+    return {"deleted": True}
 
 
 @router.post("/assign")

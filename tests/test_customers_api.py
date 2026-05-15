@@ -112,6 +112,73 @@ class CustomerImportApiTestCase(unittest.TestCase):
         self.assertEqual(body["assignment"]["assigned"], 1)
 
 
+class CustomerEditApiTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+        with SessionLocal() as db:
+            for model in (Customer, AccountGroupMember, Account, AccountGroup,
+                          SupportAgentGroupPermission, SupportAgent):
+                for row in db.query(model).all():
+                    db.delete(row)
+            db.commit()
+        bootstrap = self.client.post(
+            "/api/auth/bootstrap-admin",
+            json={"username": "root", "password": "12345678"},
+        )
+        self.auth = {"Authorization": f"Bearer {bootstrap.json()['access_token']}"}
+
+        with SessionLocal() as db:
+            c = Customer(phone="+8613800000001", name="原姓名",
+                         consent=False, source="manual", status="new")
+            db.add(c)
+            db.commit()
+            self.customer_id = c.id
+
+    def test_patch_updates_editable_fields(self) -> None:
+        resp = self.client.patch(
+            f"/api/customers/{self.customer_id}",
+            json={"name": "新姓名", "consent": True, "tags": ["VIP", "售后"],
+                  "source": "import"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertEqual(body["name"], "新姓名")
+        self.assertTrue(body["consent"])
+        self.assertEqual(body["tags"], ["VIP", "售后"])
+        self.assertEqual(body["source"], "import")
+        # phone is immutable since it's the dedup key
+        self.assertEqual(body["phone"], "+8613800000001")
+
+    def test_patch_phone_is_ignored(self) -> None:
+        resp = self.client.patch(
+            f"/api/customers/{self.customer_id}",
+            json={"phone": "+999"},
+            headers=self.auth,
+        )
+        # 200 but phone unchanged (extra fields silently ignored by pydantic)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["phone"], "+8613800000001")
+
+    def test_patch_returns_404_for_missing(self) -> None:
+        resp = self.client.patch(
+            "/api/customers/99999",
+            json={"name": "x"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_delete_removes_customer(self) -> None:
+        resp = self.client.delete(f"/api/customers/{self.customer_id}", headers=self.auth)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        with SessionLocal() as db:
+            self.assertIsNone(db.get(Customer, self.customer_id))
+
+    def test_delete_returns_404_for_missing(self) -> None:
+        resp = self.client.delete("/api/customers/99999", headers=self.auth)
+        self.assertEqual(resp.status_code, 404)
+
+
 class CustomerAssignApiTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
