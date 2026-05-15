@@ -335,8 +335,26 @@ class TelegramAdapter:
             await client(functions.account.UpdateUsernameRequest(username=new))
             return OperationResult(ok=True, detail=f"username -> {new}")
 
+        if operation == "modify_avatar":
+            file_path = params.get("file_path")
+            if not file_path:
+                return OperationResult(
+                    ok=False, error_code="missing_file",
+                    error_message="modify_avatar 需要 file_path 参数",
+                )
+            from pathlib import Path
+            p = Path(file_path)
+            if not p.is_file():
+                return OperationResult(
+                    ok=False, error_code="file_missing",
+                    error_message=f"头像文件不存在：{file_path}",
+                )
+            uploaded = await client.upload_file(str(p))
+            await client(functions.photos.UploadProfilePhotoRequest(file=uploaded))
+            return OperationResult(ok=True, detail=f"avatar set from {p.name}")
+
         # Operations not yet implemented: leave_group, detect_mutual,
-        # appeal_mutual, modify_password, modify_avatar.
+        # appeal_mutual, modify_password.
         return OperationResult(
             ok=False, error_code="not_implemented",
             error_message=f"operation '{operation}' not implemented yet",

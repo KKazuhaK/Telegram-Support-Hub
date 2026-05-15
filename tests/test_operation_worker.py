@@ -65,8 +65,10 @@ def _make_campaign(db, group_id, *, task_kind, operation_target, extra=None):
 class ExecuteBatchOpTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.db = SessionLocal()
+        from backend.app.models.data_groups import Material, MaterialGroup
         from backend.app.models.message import MessageRecord
-        for model in (MessageRecord, Campaign, AccountGroupMember, Account, AccountGroup):
+        for model in (MessageRecord, Campaign, Material, MaterialGroup,
+                      AccountGroupMember, Account, AccountGroup):
             for row in self.db.query(model).all():
                 self.db.delete(row)
         self.db.commit()
@@ -148,6 +150,60 @@ class ExecuteBatchOpTestCase(unittest.TestCase):
         result = execute_operation.execute_operation_campaign(cmp.id)
         self.assertEqual(result["status"], "skipped")
         self.assertEqual(result["reason"], "broadcast_handled_by_send_worker")
+
+    def test_modify_avatar_passes_material_file_path(self) -> None:
+        # modify_avatar should resolve the supplied material_id to its
+        # stored file_path before calling the adapter; if the material is
+        # missing or has no file the call must fail loudly so a typo'd
+        # campaign doesn't silently no-op every account.
+        from backend.app.models.data_groups import Material, MaterialGroup
+        with SessionLocal() as db:
+            g = MaterialGroup(name="avatars", kind="image")
+            db.add(g)
+            db.flush()
+            m = Material(group_id=g.id, content="logo.png", file_path="/tmp/fake-logo.png")
+            db.add(m)
+            db.commit()
+            material_id = m.id
+
+        group, accs = _seed(self.db, n_accounts=1)
+        cmp = _make_campaign(self.db, group.id, task_kind="modify_info",
+                             operation_target="modify_avatar",
+                             extra={"material_id": material_id})
+
+        captured = {}
+
+        def fake_op(account, proxy, operation, params):
+            captured["op"] = operation
+            captured["params"] = params
+            return _FakeOpResult(ok=True)
+
+        with patch.object(execute_operation, "_run_operation", side_effect=fake_op):
+            execute_operation.execute_operation_campaign(cmp.id)
+
+        self.assertEqual(captured["op"], "modify_avatar")
+        # Worker enriches extra_params with the resolved path so the
+        # adapter doesn't need to touch the DB.
+        self.assertEqual(captured["params"]["material_id"], material_id)
+        self.assertEqual(captured["params"]["file_path"], "/tmp/fake-logo.png")
+
+    def test_modify_avatar_fails_when_material_missing(self) -> None:
+        group, _ = _seed(self.db, n_accounts=1)
+        cmp = _make_campaign(self.db, group.id, task_kind="modify_info",
+                             operation_target="modify_avatar",
+                             extra={"material_id": 99999})
+
+        # _run_operation should not even be called because the worker
+        # short-circuits with a per-account failure when the material
+        # can't be resolved.
+        def boom(*_args, **_kwargs):
+            raise AssertionError("_run_operation should not be invoked")
+
+        with patch.object(execute_operation, "_run_operation", side_effect=boom):
+            result = execute_operation.execute_operation_campaign(cmp.id)
+
+        self.assertEqual(result["ok_count"], 0)
+        self.assertEqual(result["failed_count"], 1)
 
     def test_disabled_or_inactive_accounts_excluded(self) -> None:
         group, accs = _seed(self.db, n_accounts=3)

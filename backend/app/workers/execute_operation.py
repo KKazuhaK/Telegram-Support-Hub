@@ -26,6 +26,7 @@ from sqlalchemy import select
 from backend.app.core.database import SessionLocal
 from backend.app.models.account import Account, AccountGroupMember
 from backend.app.models.campaign import Campaign
+from backend.app.models.data_groups import Material
 from backend.app.models.proxy import ProxyEndpoint
 from backend.app.services.audit import write_audit
 from backend.app.telegram.adapter import OperationResult, get_adapter
@@ -74,8 +75,21 @@ def execute_operation_campaign(campaign_id: int) -> dict:
             return {"status": "skipped", "reason": "broadcast_handled_by_send_worker"}
 
         operation = campaign.operation_target
-        params = campaign.extra_params or {}
+        params = dict(campaign.extra_params or {})
         group_ids = campaign.account_group_ids or []
+
+        # modify_avatar needs the actual file path on disk. Resolve it
+        # once up front so every account in the loop uses the same file
+        # and we can fail the whole campaign cleanly if the material is
+        # gone.
+        avatar_resolve_error: str | None = None
+        if operation == "modify_avatar":
+            mid = params.get("material_id")
+            material = db.get(Material, mid) if mid else None
+            if not material or not material.file_path:
+                avatar_resolve_error = f"找不到 material_id={mid} 或该资料没有可用文件"
+            else:
+                params["file_path"] = material.file_path
         accounts = _eligible_accounts(db, group_ids)
         if not accounts:
             campaign.status = "completed"
@@ -87,15 +101,21 @@ def execute_operation_campaign(campaign_id: int) -> dict:
         ok_count = 0
         failed_count = 0
         for account in accounts:
-            proxy = db.get(ProxyEndpoint, account.proxy_id) if account.proxy_id else None
-            try:
-                result = _run_operation(account, proxy, operation, params)
-            except Exception as exc:
-                logger.exception("execute_operation crash for account %s op %s",
-                                 account.id, operation)
+            if avatar_resolve_error:
                 result = OperationResult(
-                    ok=False, error_code=type(exc).__name__, error_message=str(exc),
+                    ok=False, error_code="material_missing",
+                    error_message=avatar_resolve_error,
                 )
+            else:
+                proxy = db.get(ProxyEndpoint, account.proxy_id) if account.proxy_id else None
+                try:
+                    result = _run_operation(account, proxy, operation, params)
+                except Exception as exc:
+                    logger.exception("execute_operation crash for account %s op %s",
+                                     account.id, operation)
+                    result = OperationResult(
+                        ok=False, error_code=type(exc).__name__, error_message=str(exc),
+                    )
             if result.ok:
                 ok_count += 1
             else:

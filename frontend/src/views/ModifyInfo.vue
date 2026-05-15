@@ -5,7 +5,7 @@
       <el-button type="primary" @click="load">查询</el-button>
       <el-button type="primary" @click="openDialog">+ 新增</el-button>
       <el-button :loading="loading" @click="load">刷新</el-button>
-      <span class="hint">已支持执行：修改昵称 / 用户名 / 签名。点「启动」即下发到 worker；改密码 / 改头像仍待实现。</span>
+      <span class="hint">已支持执行：修改昵称 / 用户名 / 签名 / 头像。点「启动」即下发到 worker；改密码仍待实现（SRP 2FA）。</span>
     </div>
 
     <el-table :data="filteredRows" v-loading="loading" stripe size="small">
@@ -63,8 +63,28 @@
           </el-form-item>
         </template>
         <template v-if="form.operation_target === 'modify_avatar'">
-          <el-form-item label="文件分组" required>
-            <el-input v-model="form.extra_params.file_group" placeholder="待 R11 文件分组上线后改为下拉" />
+          <el-form-item label="图片分组" required>
+            <el-select v-model="avatarGroupId" placeholder="先选图片分组" filterable
+                       style="width: 100%" @change="loadAvatarMaterials">
+              <el-option v-for="g in avatarGroups" :key="g.id" :label="`${g.name} (${g.count ?? 0})`" :value="g.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="使用图片" required>
+            <el-select v-model="form.extra_params.material_id" placeholder="选择头像"
+                       filterable style="width: 100%" :disabled="!avatarGroupId">
+              <el-option v-for="m in avatarMaterials" :key="m.id" :label="m.content || `material#${m.id}`" :value="m.id">
+                <div style="display: flex; align-items: center; gap: 8px">
+                  <el-image
+                    :src="avatarPreview(m.id)" fit="cover"
+                    style="width: 24px; height: 24px; border-radius: 2px"
+                  />
+                  <span>{{ m.content || `material#${m.id}` }}</span>
+                </div>
+              </el-option>
+            </el-select>
+            <p class="hint" v-if="form.extra_params.material_id">
+              所有账号会换上同一张头像。每个账号执行一次 UploadProfilePhoto。
+            </p>
           </el-form-item>
         </template>
 
@@ -108,6 +128,9 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
 
 const OPERATIONS = [
   { value: "modify_password", label: "修改密码" },
@@ -139,6 +162,26 @@ const defaultForm = () => ({
 })
 const form = reactive(defaultForm())
 
+const avatarGroups = ref([])
+const avatarMaterials = ref([])
+const avatarGroupId = ref(null)
+
+function avatarPreview(id) {
+  return `/api/materials/${id}/download?token=${encodeURIComponent(auth.token)}`
+}
+
+async function loadAvatarGroups() {
+  const { data } = await http.get('/material-groups', { params: { kind: 'image' } })
+  avatarGroups.value = data
+}
+
+async function loadAvatarMaterials() {
+  if (!avatarGroupId.value) { avatarMaterials.value = []; return }
+  const { data } = await http.get('/materials', { params: { group_id: avatarGroupId.value } })
+  avatarMaterials.value = data
+  form.extra_params.material_id = null
+}
+
 const newValueLabel = computed(() => {
   return ({
     modify_nickname: '新昵称',
@@ -156,6 +199,11 @@ const filteredRows = computed(() => {
 function onOpChange() {
   // Reset extra_params on op switch so stale fields don't get serialised.
   form.extra_params = {}
+  avatarGroupId.value = null
+  avatarMaterials.value = []
+  if (form.operation_target === 'modify_avatar') {
+    loadAvatarGroups()
+  }
 }
 
 function formatGroups(ids) {

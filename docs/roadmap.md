@@ -61,7 +61,7 @@ PRD 描述的是一个**多租户商业系统**：总后台 → 商务代理 →
 | **R2** | 端口资源 / 配额 | 🕒 | R1 | M | merchants 表带 `ports_total / ports_used / ports_expires_at / ports_reset_at`；账号上线时校验端口；过期自动锁号 |
 | **R3** | 商务代理 CRUD UI | 🚧 | R1 | M | 列表 + 新增/编辑（名称、密码、昵称、平台、Logo、域名、备注、状态）；列表筛选 |
 | **R4** | 商家账号 CRUD UI | 🚧 | R1 + R2 | M | 列表 + 新增/编辑 + 批量改客服权限；端口配额可视 |
-| **R5** | 任务管理三件套字段全量化 | 🚧 | — | L | **数据层 ✅ 2026-05-15** + **R5.execute slice 1 ✅ 2026-05-15**：execute_operation Celery worker；adapter `run_operation` 路由到 Telethon RPC；已实现 5 个操作（delete_friend / leave_other_devices / modify_nickname / modify_signature / modify_username）。campaign.start 自动入队。**剩余**：leave_group / detect_mutual / appeal_mutual / modify_password / modify_avatar 五个 RPC。 |
+| **R5** | 任务管理三件套字段全量化 | 🚧 | — | L | **数据层 ✅** + **execute slice 1 ✅** + **execute slice 2 ✅** (2026-05-15)：6 个 Telethon RPC（delete_friend / leave_other_devices / modify_nickname / signature / username / **avatar**）；前端头像表单接通 R11 文件上传。**剩余**：leave_group / detect_mutual / appeal_mutual / modify_password。 |
 | **R6** | 消息模板变量系统 | ✅ | — | M | 15+ 变量渲染 + 富文本 entity（UTF-16 offset 准确）+ 预览 API + 模板页双栏帮助。完成于 2026-05-15。 |
 | **R7** | 任务日志页 | ✅ | — | M | audit_logs 加 `action_prefix` 过滤；前端 任务日志（基于 message-details）+ 导入导出 两页 + 日志记录 子菜单 3 项。客户端 CSV 导出。完成于 2026-05-15。 |
 | **R8** | 任务统计图表 | ✅ | — | M | 后端 `/api/statistics/{timeseries,message-details}`；前端 ECharts 柱+折线图 + 5 项汇总徽章 + 时段缩略 + 状态/任务/账号/日期筛选；维度对比保留。完成于 2026-05-15。剩 R16 导出报表。 |
@@ -145,3 +145,4 @@ Phase 6（产品化）：R12 → R13 → R14
 - **2026-05-15** — R11 文件管理重构：Material 支持上传/下载，前端 3 个类型 tab + 图片预览 + 语音试听；FlexibleUserDep 支持 `?token=...` 让 img/audio 标签直接渲染（153 测试）。
 - **2026-05-15** — R5.execute slice 1：execute_operation worker + 5 个 Telethon RPC（delete_friend / leave_other_devices / modify_nickname / signature / username）；campaign.start 钩入任务派发（158 测试）。
 - **2026-05-15** — R9 账号高级筛选 + 批量动作扩展：4 个新字段 + 7 个新 list filter + batch endpoint 支持代理 / 分组转移（162 测试）。
+- **2026-05-15** — R5.execute slice 2：modify_avatar Telethon RPC + 前端图片分组+图片选择器（接通 R11）（164 测试）。
