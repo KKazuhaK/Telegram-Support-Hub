@@ -43,9 +43,14 @@ def _resolve_target(message: MessageRecord) -> str | None:
     return message.target_tg_user_id or message.phone
 
 
-def _send_via_adapter(account: Account, proxy: ProxyEndpoint | None, target: str, body: str) -> TelegramSendResult:
+def _send_via_adapter(
+    account: Account, proxy: ProxyEndpoint | None,
+    target: str, body: str, entities: list | None = None,
+) -> TelegramSendResult:
     adapter = get_adapter()
-    return asyncio.run(adapter.send_message(account=account, target=target, body=body, proxy=proxy))
+    return asyncio.run(adapter.send_message(
+        account=account, target=target, body=body, proxy=proxy, entities=entities,
+    ))
 
 
 @celery_app.task(name="backend.app.workers.send_tasks.dispatch_send_queue")
@@ -132,7 +137,10 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
                 proxy = db.get(ProxyEndpoint, account.proxy_id) if account.proxy_id else None
 
                 try:
-                    result = _send_via_adapter(account, proxy, target, message.body_snapshot)
+                    result = _send_via_adapter(
+                        account, proxy, target, message.body_snapshot,
+                        entities=message.entities,
+                    )
                 except Exception as exc:  # adapter framework error
                     logger.exception("dispatch send failed for message %s", message.id)
                     result = TelegramSendResult(

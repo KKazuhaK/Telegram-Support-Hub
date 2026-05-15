@@ -10,6 +10,7 @@ from backend.app.models.account import Account, AccountGroupMember
 from backend.app.models.campaign import Campaign
 from backend.app.models.message import MessageRecord
 from backend.app.models.template import MessageTemplate
+from backend.app.services.template_engine import render_message
 
 
 def _accounts_for_groups(db: Session, group_ids: list[int]) -> list[Account]:
@@ -29,12 +30,8 @@ def _accounts_for_groups(db: Session, group_ids: list[int]) -> list[Account]:
     )
 
 
-def _render(body: str, name: str | None, phone: str | None, source: str) -> str:
-    return (
-        body.replace("{name}", name or "客户")
-        .replace("{phone}", phone or "")
-        .replace("{source}", source)
-    )
+def _render(body: str, name: str | None, phone: str | None, source: str):
+    return render_message(body, {"name": name, "phone": phone, "source": source})
 
 
 def build_imported_target_records(
@@ -67,12 +64,14 @@ def build_imported_target_records(
             continue
         account = accounts[cursor % len(accounts)]
         cursor += 1
+        rendered = _render(template.body, name, phone, source)
         db.add(MessageRecord(
             campaign_id=campaign.id,
             account_id=account.id,
             phone=phone,
             target_tg_user_id=username,
-            body_snapshot=_render(template.body, name, phone, source),
+            body_snapshot=rendered.text,
+            entities=rendered.entities or None,
             status="queued",
             next_run_at=now_iso,
         ))

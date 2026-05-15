@@ -70,7 +70,7 @@ class SendWorkerTestCase(unittest.TestCase):
     def test_successful_send_marks_message_and_increments_counters(self) -> None:
         account, campaign, msg = _seed(self.db)
 
-        def fake_send(account, proxy, target, body):
+        def fake_send(account, proxy, target, body, entities=None):
             return TelegramSendResult(ok=True, external_message_id="mid-1", target_tg_user_id="100200300")
 
         with patch.object(send_tasks, "_send_via_adapter", side_effect=fake_send), \

@@ -7,6 +7,7 @@ from backend.app.models.template import MessageTemplate
 from backend.app.services.audit import write_audit
 from backend.app.services.permissions import permission_denied_detail
 from backend.app.services.serializers import list_dict, to_dict
+from backend.app.services.template_engine import render_message
 
 router = APIRouter()
 
@@ -20,6 +21,20 @@ class TemplateUpdate(BaseModel):
     name: str | None = None
     body: str | None = None
     enabled: bool | None = None
+
+
+class TemplatePreview(BaseModel):
+    body: str
+    context: dict | None = None
+
+
+@router.post("/preview")
+def preview_template(payload: TemplatePreview, _: CurrentUserDep) -> dict:
+    """Render a template body against an optional context. Random tags use
+    a freshly seeded PRNG so previews change on each call (as they would
+    in production)."""
+    result = render_message(payload.body, payload.context or {})
+    return {"text": result.text, "entities": result.entities}
 
 
 @router.get("")

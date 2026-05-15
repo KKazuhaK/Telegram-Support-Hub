@@ -14,6 +14,7 @@ from backend.app.services.audit import write_audit
 from backend.app.services.imported_target import build_imported_target_records
 from backend.app.services.permissions import permission_denied_detail
 from backend.app.services.serializers import list_dict, to_dict
+from backend.app.services.template_engine import render_message
 from backend.app.services.template_renderer import render_template
 
 router = APIRouter()
@@ -73,12 +74,16 @@ def _build_customer_records(db, campaign: Campaign, template: MessageTemplate, c
     for customer in customers:
         if not customer.assigned_account_id:
             continue
+        rendered = render_message(template.body, {
+            "name": customer.name, "phone": customer.phone, "source": customer.source,
+        })
         db.add(MessageRecord(
             campaign_id=campaign.id,
             account_id=customer.assigned_account_id,
             customer_id=customer.id,
             phone=customer.phone,
-            body_snapshot=render_template(template.body, customer),
+            body_snapshot=rendered.text,
+            entities=rendered.entities or None,
             status="queued",
             next_run_at=now_iso,
         ))
@@ -97,18 +102,19 @@ def _build_friend_records(db, campaign: Campaign, template: MessageTemplate, gro
     friends = list(db.scalars(stmt))
     body = template.body
     for friend in friends:
-        rendered = (
-            body.replace("{name}", friend.nickname or friend.username or "好友")
-            .replace("{phone}", friend.phone or "")
-            .replace("{source}", "friend")
-        )
+        rendered = render_message(body, {
+            "name": friend.nickname or friend.username or "好友",
+            "phone": friend.phone or "",
+            "source": "friend",
+        })
         db.add(MessageRecord(
             campaign_id=campaign.id,
             account_id=friend.account_id,
             friend_id=friend.id,
             target_tg_user_id=friend.tg_user_id,
             phone=friend.phone,
-            body_snapshot=rendered,
+            body_snapshot=rendered.text,
+            entities=rendered.entities or None,
             status="queued",
             next_run_at=now_iso,
         ))

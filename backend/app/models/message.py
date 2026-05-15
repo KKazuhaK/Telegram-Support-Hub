@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.core.database import Base
@@ -28,3 +28,4 @@ class MessageRecord(Base, TimestampMixin):
     locked_at: Mapped[str | None] = mapped_column(String(64))
     external_message_id: Mapped[str | None] = mapped_column(String(64), index=True)
     target_tg_user_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    entities: Mapped[list | None] = mapped_column(JSON)

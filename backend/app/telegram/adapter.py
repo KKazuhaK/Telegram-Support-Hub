@@ -59,6 +59,54 @@ def _strip_session_suffix(path: str) -> str:
     return path[:-8] if path.endswith(".session") else path
 
 
+def _to_telethon_entities(entities: list[dict] | None, _text: str) -> list | None:
+    """Convert our portable {type/offset/length/...} dicts into Telethon
+    MessageEntity* objects. Unknown types are silently skipped — they will
+    still appear in the message body as plain text."""
+    if not entities or not TELETHON_AVAILABLE:
+        return None
+    try:
+        from telethon.tl import types as tl
+    except Exception:
+        return None
+
+    out: list = []
+    for ent in entities:
+        kind = ent.get("type")
+        off = int(ent.get("offset", 0))
+        length = int(ent.get("length", 0))
+        try:
+            if kind == "bold":
+                out.append(tl.MessageEntityBold(offset=off, length=length))
+            elif kind == "italic":
+                out.append(tl.MessageEntityItalic(offset=off, length=length))
+            elif kind == "underline":
+                out.append(tl.MessageEntityUnderline(offset=off, length=length))
+            elif kind == "strike":
+                out.append(tl.MessageEntityStrike(offset=off, length=length))
+            elif kind == "code":
+                out.append(tl.MessageEntityCode(offset=off, length=length))
+            elif kind == "pre":
+                out.append(tl.MessageEntityPre(offset=off, length=length, language=ent.get("language", "")))
+            elif kind == "url":
+                out.append(tl.MessageEntityUrl(offset=off, length=length))
+            elif kind == "text_url":
+                out.append(tl.MessageEntityTextUrl(offset=off, length=length, url=ent.get("url", "")))
+            elif kind == "email":
+                out.append(tl.MessageEntityEmail(offset=off, length=length))
+            elif kind == "mention":
+                out.append(tl.MessageEntityMention(offset=off, length=length))
+            elif kind == "hashtag":
+                out.append(tl.MessageEntityHashtag(offset=off, length=length))
+            elif kind == "phone":
+                out.append(tl.MessageEntityPhone(offset=off, length=length))
+        except Exception:
+            # Telethon may version-bump entity constructors; falling through
+            # leaves the plaintext intact rather than failing the whole send.
+            continue
+    return out or None
+
+
 class TelegramAdapter:
     """Wraps Telethon. Falls back to a no-op stub when Telethon is unavailable
     or `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` are not configured.
@@ -148,6 +196,7 @@ class TelegramAdapter:
         target: str,
         body: str,
         proxy: ProxyEndpoint | None = None,
+        entities: list[dict] | None = None,
     ) -> TelegramSendResult:
         if not self.configured:
             return TelegramSendResult(
@@ -169,7 +218,11 @@ class TelegramAdapter:
                 )
             entity = await self.resolve_target(client, target)
             tg_user_id = str(getattr(entity, "id", "")) or None
-            sent = await client.send_message(entity, body)
+            formatting = _to_telethon_entities(entities, body) if entities else None
+            if formatting:
+                sent = await client.send_message(entity, body, formatting_entities=formatting)
+            else:
+                sent = await client.send_message(entity, body)
             return TelegramSendResult(
                 ok=True,
                 external_message_id=str(getattr(sent, "id", "")) or None,
