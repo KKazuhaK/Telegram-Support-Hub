@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from unittest.mock import patch
 
 import tests.support as support
 
@@ -50,8 +51,13 @@ class ListenWorkerTestCase(unittest.TestCase):
             for row in self.db.query(model).all():
                 self.db.delete(row)
         self.db.commit()
+        # Unit tests should not require a live Redis. Stub out the publish call
+        # so the real reply_bus is exercised separately (test_reply_bus.py).
+        self._publish_patch = patch("backend.app.workers.listen_worker.publish_reply")
+        self._publish_mock = self._publish_patch.start()
 
     def tearDown(self) -> None:
+        self._publish_patch.stop()
         self.db.close()
 
     def test_reply_updates_customer_friend_message_and_campaign(self) -> None:
@@ -79,6 +85,18 @@ class ListenWorkerTestCase(unittest.TestCase):
             self.assertEqual(cmp.reply_count, 1)
             acc = db.get(Account, account.id)
             self.assertEqual(acc.total_replies, 1)
+
+    def test_publish_reply_is_called_once(self) -> None:
+        account, *_ = _seed_full(self.db)
+        payload = {
+            "account_id": account.id, "tg_user_id": "999", "phone": "+8613800000000",
+            "text": "ping", "date": "2026-05-15T12:00:00+00:00",
+        }
+        asyncio.run(_persist_reply(payload))
+        self.assertEqual(self._publish_mock.call_count, 1)
+        published = self._publish_mock.call_args.args[0]
+        self.assertEqual(published["account_id"], account.id)
+        self.assertEqual(published["text"], "ping")
 
     def test_reply_without_match_is_silent(self) -> None:
         # no seed
