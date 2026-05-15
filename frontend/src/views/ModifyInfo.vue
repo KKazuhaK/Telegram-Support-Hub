@@ -5,7 +5,7 @@
       <el-button type="primary" @click="load">查询</el-button>
       <el-button type="primary" @click="openDialog">+ 新增</el-button>
       <el-button :loading="loading" @click="load">刷新</el-button>
-      <span class="hint">⚠ 执行端尚未实现；任务可入库但不会自动跑（路线图 R5.execute）。</span>
+      <span class="hint">已支持执行：修改昵称 / 用户名 / 签名。点「启动」即下发到 worker；改密码 / 改头像仍待实现。</span>
     </div>
 
     <el-table :data="filteredRows" v-loading="loading" stripe size="small">

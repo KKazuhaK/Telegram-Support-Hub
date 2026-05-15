@@ -43,6 +43,15 @@ class TelegramValidateResult:
     error_message: str | None = None
 
 
+@dataclass
+class OperationResult:
+    """Outcome of a single per-account operation (delete_friend, etc.)."""
+    ok: bool
+    detail: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
 def _proxy_to_telethon(proxy: ProxyEndpoint | None) -> tuple | None:
     if not proxy:
         return None
@@ -244,6 +253,94 @@ class TelegramAdapter:
                 await client.disconnect()
             except Exception:
                 pass
+
+    async def run_operation(
+        self,
+        account: Account,
+        operation: str,
+        params: dict,
+        proxy: ProxyEndpoint | None = None,
+    ) -> OperationResult:
+        """Run a single non-message operation against `account`.
+
+        Supported operations:
+          delete_friend          — remove all contacts (clears the friend list)
+          leave_other_devices    — kick all other authorised sessions
+          modify_nickname        — UpdateProfileRequest first_name=new_value
+          modify_signature       — UpdateProfileRequest about=new_value
+          modify_username        — UpdateUsernameRequest
+
+        Returns OperationResult so the worker can branch on .ok without
+        exception handling. Telethon errors are caught and surfaced via
+        error_code/error_message; an unconfigured adapter (no
+        TELEGRAM_API_ID) returns ok=False with `telegram_not_configured`.
+        """
+        if not self.configured:
+            return OperationResult(
+                ok=False, error_code="telegram_not_configured",
+                error_message="Telethon not installed or TELEGRAM_API_ID/HASH not set",
+            )
+        try:
+            client = self._build_client(account, proxy)
+        except FileNotFoundError as exc:
+            return OperationResult(ok=False, error_code="session_missing", error_message=str(exc))
+
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                return OperationResult(
+                    ok=False, error_code="session_unauthorized",
+                    error_message="session not authorized",
+                )
+            return await self._dispatch_operation(client, operation, params)
+        except Exception as exc:
+            logger.exception("run_operation failed for account %s op %s",
+                             account.id, operation)
+            return OperationResult(
+                ok=False, error_code=type(exc).__name__, error_message=str(exc),
+            )
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+
+    async def _dispatch_operation(self, client: Any, operation: str, params: dict) -> OperationResult:
+        from telethon.tl import functions, types  # local import keeps test envs without telethon happy
+
+        if operation == "delete_friend":
+            contacts = await client(functions.contacts.GetContactsRequest(hash=0))
+            users = getattr(contacts, "users", []) or []
+            if not users:
+                return OperationResult(ok=True, detail="no contacts to delete")
+            await client(functions.contacts.DeleteContactsRequest(id=[u.id for u in users]))
+            return OperationResult(ok=True, detail=f"removed {len(users)} contacts")
+
+        if operation == "leave_other_devices":
+            await client(functions.auth.ResetAuthorizationsRequest())
+            return OperationResult(ok=True, detail="other sessions reset")
+
+        if operation == "modify_nickname":
+            new = (params.get("new_value") or "").strip()
+            await client(functions.account.UpdateProfileRequest(first_name=new))
+            return OperationResult(ok=True, detail=f"nickname -> {new}")
+
+        if operation == "modify_signature":
+            new = (params.get("new_value") or "").strip()
+            await client(functions.account.UpdateProfileRequest(about=new))
+            return OperationResult(ok=True, detail=f"about -> {new}")
+
+        if operation == "modify_username":
+            new = (params.get("new_value") or "").strip().lstrip("@")
+            await client(functions.account.UpdateUsernameRequest(username=new))
+            return OperationResult(ok=True, detail=f"username -> {new}")
+
+        # Operations not yet implemented: leave_group, detect_mutual,
+        # appeal_mutual, modify_password, modify_avatar.
+        return OperationResult(
+            ok=False, error_code="not_implemented",
+            error_message=f"operation '{operation}' not implemented yet",
+        )
 
     async def listen_incoming(
         self,

@@ -5,7 +5,7 @@
       <el-button type="primary" @click="load">查询</el-button>
       <el-button type="primary" @click="openDialog">+ 新增</el-button>
       <el-button :loading="loading" @click="load">刷新</el-button>
-      <span class="hint">⚠ 执行端尚未实现；任务可入库但不会自动跑（路线图 R5.execute）。</span>
+      <span class="hint">已支持执行：删除好友 / 退出其他设备。点「启动」即下发到 worker；其他类型仍待 Telethon RPC 接入。</span>
     </div>
 
     <el-table :data="filteredRows" v-loading="loading" stripe size="small">

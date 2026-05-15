@@ -298,6 +298,13 @@ def start_campaign(campaign_id: int, db: DbSession, user: CurrentUserDep) -> dic
     write_audit(db, actor=user, action="campaign.start", target_type="campaign", target_id=campaign.id)
     db.commit()
     db.refresh(campaign)
+
+    # broadcast tasks pump through send_worker via existing MessageRecord
+    # rows; batch_op / modify_info need an explicit worker dispatch.
+    if campaign.task_kind in ("batch_op", "modify_info"):
+        from backend.app.workers.execute_operation import execute_operation_campaign
+        execute_operation_campaign.delay(campaign.id)
+
     return to_dict(campaign)
 
 

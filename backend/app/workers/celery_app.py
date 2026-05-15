@@ -8,11 +8,13 @@ celery_app = Celery("tg_support_hub", broker=settings.redis_url, backend=setting
 celery_app.conf.imports = (
     "backend.app.workers.account_tasks",
     "backend.app.workers.send_tasks",
+    "backend.app.workers.execute_operation",
 )
 
 celery_app.conf.task_routes = {
     "backend.app.workers.send_tasks.*": {"queue": "send"},
     "backend.app.workers.account_tasks.*": {"queue": "account"},
+    "backend.app.workers.execute_operation.*": {"queue": "send"},
 }
 
 celery_app.conf.timezone = "UTC"
