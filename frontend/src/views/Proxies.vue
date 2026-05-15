@@ -60,9 +60,20 @@
           </el-table-column>
           <el-table-column prop="latency_ms" label="延迟" width="80" />
           <el-table-column prop="last_error" label="最近错误" show-overflow-tooltip />
-          <el-table-column label="操作" width="160">
+          <el-table-column label="操作" width="220">
             <template #default="{ row }">
               <el-button size="small" link @click="checkProxy(row)">检测</el-button>
+              <el-button size="small" link @click="openProxyDialog(row)">编辑</el-button>
+              <el-popconfirm
+                title="禁用后该代理不再参与调度；已绑定的账号会被标 proxy_error。确认禁用？"
+                @confirm="deleteProxy(row)"
+              >
+                <template #reference>
+                  <el-button size="small" link type="danger" :disabled="row.status === 'disabled'">
+                    {{ row.status === 'disabled' ? '已禁用' : '禁用' }}
+                  </el-button>
+                </template>
+              </el-popconfirm>
             </template>
           </el-table-column>
         </el-table>
@@ -81,7 +92,7 @@
     </template>
   </el-dialog>
 
-  <el-dialog v-model="proxyDialog" title="新建代理" width="480px">
+  <el-dialog v-model="proxyDialog" :title="proxyForm.id ? '编辑代理' : '新建代理'" width="480px">
     <el-form :model="proxyForm" label-width="80px">
       <el-form-item label="所属分组">
         <el-select v-model="proxyForm.group_id" clearable>
@@ -99,13 +110,29 @@
       <el-form-item label="主机"><el-input v-model="proxyForm.host" /></el-form-item>
       <el-form-item label="端口"><el-input-number v-model="proxyForm.port" :min="1" :max="65535" /></el-form-item>
       <el-form-item label="用户名"><el-input v-model="proxyForm.username" /></el-form-item>
-      <el-form-item label="密码"><el-input v-model="proxyForm.password" type="password" show-password /></el-form-item>
+      <el-form-item label="密码">
+        <el-input
+          v-model="proxyForm.password"
+          type="password"
+          show-password
+          :placeholder="proxyForm.id ? '留空表示不修改' : ''"
+        />
+      </el-form-item>
       <el-form-item label="国家"><el-input v-model="proxyForm.country" placeholder="如 CN" /></el-form-item>
       <el-form-item label="最大账号"><el-input-number v-model="proxyForm.max_accounts" :min="0" /></el-form-item>
+      <el-form-item v-if="proxyForm.id" label="状态">
+        <el-select v-model="proxyForm.status">
+          <el-option label="active" value="active" />
+          <el-option label="unchecked" value="unchecked" />
+          <el-option label="error" value="error" />
+          <el-option label="disabled" value="disabled" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="备注"><el-input v-model="proxyForm.remark" type="textarea" :rows="2" /></el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="proxyDialog = false">取消</el-button>
-      <el-button type="primary" @click="saveProxy">保存</el-button>
+      <el-button type="primary" :loading="savingProxy" @click="saveProxy">保存</el-button>
     </template>
   </el-dialog>
 </template>
@@ -128,9 +155,12 @@ const groupDialog = ref(false)
 const groupForm = reactive({ id: null, name: '', remark: '' })
 
 const proxyDialog = ref(false)
+const savingProxy = ref(false)
 const proxyForm = reactive({
+  id: null,
   group_id: null, name: '', protocol: 'socks5', host: '', port: 1080,
   username: '', password: '', country: '', max_accounts: 5,
+  status: 'unchecked', remark: '',
 })
 
 async function loadGroups() {
@@ -187,21 +217,89 @@ async function deleteGroup(g) {
   await loadItems()
 }
 
-function openProxyDialog() {
-  Object.assign(proxyForm, {
-    group_id: typeof activeGroupId.value === 'number' && activeGroupId.value > 0 ? activeGroupId.value : null,
-    name: '', protocol: 'socks5', host: '', port: 1080,
-    username: '', password: '', country: '', max_accounts: 5,
-  })
+function openProxyDialog(row = null) {
+  if (row) {
+    Object.assign(proxyForm, {
+      id: row.id,
+      group_id: row.group_id ?? null,
+      name: row.name || '',
+      protocol: row.protocol || 'socks5',
+      host: row.host || '',
+      port: row.port || 1080,
+      username: row.username || '',
+      password: '',  // never echo back the stored password
+      country: row.country || '',
+      max_accounts: row.max_accounts ?? 5,
+      status: row.status || 'unchecked',
+      remark: row.remark || '',
+    })
+  } else {
+    Object.assign(proxyForm, {
+      id: null,
+      group_id: typeof activeGroupId.value === 'number' && activeGroupId.value > 0 ? activeGroupId.value : null,
+      name: '', protocol: 'socks5', host: '', port: 1080,
+      username: '', password: '', country: '', max_accounts: 5,
+      status: 'unchecked', remark: '',
+    })
+  }
   proxyDialog.value = true
 }
 
 async function saveProxy() {
-  await http.post('/proxies', { ...proxyForm })
-  proxyDialog.value = false
+  if (!proxyForm.name || !proxyForm.host) {
+    ElMessage.warning('请填写名称和主机')
+    return
+  }
+  savingProxy.value = true
+  try {
+    if (proxyForm.id) {
+      // PATCH only sends fields the user actually filled. Empty password
+      // means "don't change", not "set to empty".
+      const payload = {
+        group_id: proxyForm.group_id,
+        name: proxyForm.name,
+        protocol: proxyForm.protocol,
+        host: proxyForm.host,
+        port: proxyForm.port,
+        username: proxyForm.username,
+        country: proxyForm.country,
+        max_accounts: proxyForm.max_accounts,
+        status: proxyForm.status,
+        remark: proxyForm.remark,
+      }
+      if (proxyForm.password) payload.password = proxyForm.password
+      await http.patch(`/proxies/${proxyForm.id}`, payload)
+      ElMessage.success('已更新')
+    } else {
+      await http.post('/proxies', {
+        group_id: proxyForm.group_id,
+        name: proxyForm.name,
+        protocol: proxyForm.protocol,
+        host: proxyForm.host,
+        port: proxyForm.port,
+        username: proxyForm.username,
+        password: proxyForm.password,
+        country: proxyForm.country,
+        max_accounts: proxyForm.max_accounts,
+        remark: proxyForm.remark,
+      })
+      ElMessage.success('已创建')
+    }
+    proxyDialog.value = false
+    await loadGroups()
+    await loadItems()
+  } finally {
+    savingProxy.value = false
+  }
+}
+
+async function deleteProxy(row) {
+  // No dedicated DELETE endpoint yet; "disable" via PATCH instead so
+  // existing account bindings stay intact but the proxy won't be used.
+  await http.patch(`/proxies/${row.id}`, { status: 'disabled' })
+  ElMessage.success(`已禁用代理 ${row.name}`)
   await loadGroups()
   await loadItems()
-  ElMessage.success('已创建')
 }
 
 async function checkProxy(row) {
