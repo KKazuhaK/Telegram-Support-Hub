@@ -64,7 +64,7 @@ PRD 描述的是一个**多租户商业系统**：总后台 → 商务代理 →
 | **R5** | 任务管理三件套字段全量化 | 🚧 | — | L | **数据层 ✅ 2026-05-15**：Campaign 加 task_kind/operation_target/extra_params；3 个独立任务簇 + 5 个批量操作 + 5 个修改资料类型可建可查；后端验证 + 3 个前端页 + 侧栏 3 项。**剩余 R5.execute**：批量操作 / 修改资料的真实执行 worker（需要 Telethon 调用 deleteFriend / leaveGroup / setProfile 等 RPC） |
 | **R6** | 消息模板变量系统 | ✅ | — | M | 15+ 变量渲染 + 富文本 entity（UTF-16 offset 准确）+ 预览 API + 模板页双栏帮助。完成于 2026-05-15。 |
 | **R7** | 任务日志页 | 🕒 | — | M | 现有 audit_logs 拆 view：`/log/record`（按任务）和 `/log/inout`（导入导出记录）；按日期/状态/账号/任务 ID 筛选 + 导出 |
-| **R8** | 任务统计图表 | 🚧 | — | M | 现有 task-stats 加 Tab：`统计详情`（表格 + 导出）与 `统计报表`（折线柱图 + 5 项汇总徽章），用 ECharts |
+| **R8** | 任务统计图表 | ✅ | — | M | 后端 `/api/statistics/{timeseries,message-details}`；前端 ECharts 柱+折线图 + 5 项汇总徽章 + 时段缩略 + 状态/任务/账号/日期筛选；维度对比保留。完成于 2026-05-15。剩 R16 导出报表。 |
 | **R9** | 账号管理高级筛选抽屉 | 🚧 | — | M | 头像状态/账号昵称/日期范围筛选；批量动作下拉项扩展到 10 个（修改资料、解绑客服、转移分组、转移账号、分配代理等） |
 | **R10** | 客服中心扩展 | 🚧 | R1 / R3 | M | 今日接待/读取/发送/读取率/回复率实时指标；"打开客服页面"跳转 client 子域；批量新增、批量导出、批量删除 |
 | **R11** | 文件管理重构 | 🚧 | — | S-M | 按类型 Tab（图片/语音/账号/代理/号码/文本）+ 左侧文件组面板；当前 `/api/files` 升级成带 file_group 的 |
@@ -139,3 +139,5 @@ Phase 6（产品化）：R12 → R13 → R14
 - **2026-05-15** — R1 落地：BusinessAgent + Merchant 实体 + 端口字段 + 后台页面（92 测试）。
 - **2026-05-15** — R6 落地：模板变量引擎（UTF-16 entity offset 准确） + 端到端接入 send_worker + 预览 UI（117 测试）。
 - **2026-05-15** — R5 数据层落地：Campaign.task_kind/operation_target/extra_params + 3 个任务簇 + 严格枚举校验 + 前端 3 页 + 任务管理子菜单 3 项（122 测试）。R5.execute（实际执行）留下一个迭代。
+- **2026-05-15** — Schema auto-migrate：启动时 `ensure_columns_present` 把模型新加列自动 ALTER TABLE ADD（129 测试）。
+- **2026-05-15** — R8 任务统计图表：timeseries + message-details API + ECharts 柱+线双轴图 + 5 汇总徽章 + 维度对比（142 测试）。
