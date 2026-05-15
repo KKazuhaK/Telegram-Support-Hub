@@ -9,12 +9,12 @@ const routes = [
     children: [
       { path: '', redirect: { name: 'dashboard' } },
       { path: 'dashboard', name: 'dashboard', component: () => import('@/views/Dashboard.vue'), meta: { title: '仪表盘' } },
-      { path: 'accounts', name: 'accounts', component: () => import('@/views/Accounts.vue'), meta: { title: 'TG 账号' } },
+      { path: 'accounts', name: 'accounts', component: () => import('@/views/Accounts.vue'), meta: { title: '账号管理' } },
       { path: 'account-groups', name: 'account-groups', component: () => import('@/views/AccountGroups.vue'), meta: { title: '账号分组' } },
       { path: 'friends', name: 'friends', component: () => import('@/views/Friends.vue'), meta: { title: '好友列表' } },
 
       // 任务管理
-      { path: 'campaigns', name: 'campaigns', component: () => import('@/views/Campaigns.vue'), meta: { title: '群发任务' } },
+      { path: 'campaigns', name: 'campaigns', component: () => import('@/views/Campaigns.vue'), meta: { title: '批量群发' } },
       { path: 'templates', name: 'templates', component: () => import('@/views/Templates.vue'), meta: { title: '消息模板' } },
       { path: 'replies', name: 'replies', component: () => import('@/views/Replies.vue'), meta: { title: '回复管理' } },
 
@@ -25,12 +25,14 @@ const routes = [
       { path: 'audit-logs', name: 'audit-logs', component: () => import('@/views/AuditLogs.vue'), meta: { title: '审计日志', adminOnly: true } },
 
       // 客服中心
-      { path: 'agents', name: 'agents', component: () => import('@/views/Agents.vue'), meta: { title: '客服账号', adminOnly: true } },
+      { path: 'agents', name: 'agents', component: () => import('@/views/Agents.vue'), meta: { title: '客服列表', adminOnly: true } },
 
       // 数据管理
-      { path: 'customers', name: 'customers', component: () => import('@/views/Customers.vue'), meta: { title: '号码数据（客户）' } },
+      { path: 'customers', name: 'customers', component: () => import('@/views/Customers.vue'), meta: { title: '客户管理' } },
+      { path: 'phones', name: 'phones', component: () => import('@/views/Phones.vue'), meta: { title: '号码数据' } },
+      { path: 'materials', name: 'materials', component: () => import('@/views/Materials.vue'), meta: { title: '文本数据' } },
       { path: 'files', name: 'files', component: () => import('@/views/Files.vue'), meta: { title: '文件管理', adminOnly: true } },
-      { path: 'proxies', name: 'proxies', component: () => import('@/views/Proxies.vue'), meta: { title: '代理 IP 管理', adminOnly: true } },
+      { path: 'proxies', name: 'proxies', component: () => import('@/views/Proxies.vue'), meta: { title: '代理IP管理', adminOnly: true } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: { name: 'dashboard' } },

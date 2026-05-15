@@ -17,21 +17,21 @@
             <template #title>账号管理</template>
           </el-menu-item>
 
-          <el-menu-item index="account-groups" :route="{ name: 'account-groups' }">
-            <el-icon><Collection /></el-icon>
-            <template #title>账号分组</template>
-          </el-menu-item>
-
           <el-menu-item index="friends" :route="{ name: 'friends' }">
             <el-icon><Avatar /></el-icon>
             <template #title>好友列表</template>
+          </el-menu-item>
+
+          <el-menu-item index="account-groups" :route="{ name: 'account-groups' }">
+            <el-icon><Collection /></el-icon>
+            <template #title>账号分组</template>
           </el-menu-item>
 
           <el-sub-menu index="task-mgmt">
             <template #title>
               <el-icon><Promotion /></el-icon><span>任务管理</span>
             </template>
-            <el-menu-item index="campaigns" :route="{ name: 'campaigns' }">群发任务</el-menu-item>
+            <el-menu-item index="campaigns" :route="{ name: 'campaigns' }">批量群发</el-menu-item>
             <el-menu-item index="templates" :route="{ name: 'templates' }">消息模板</el-menu-item>
             <el-menu-item index="replies" :route="{ name: 'replies' }">回复管理</el-menu-item>
           </el-sub-menu>
@@ -53,7 +53,7 @@
               <template #title>
                 <el-icon><UserFilled /></el-icon><span>客服中心</span>
               </template>
-              <el-menu-item index="agents" :route="{ name: 'agents' }">客服账号</el-menu-item>
+              <el-menu-item index="agents" :route="{ name: 'agents' }">客服列表</el-menu-item>
             </el-sub-menu>
           </template>
 
@@ -61,9 +61,11 @@
             <template #title>
               <el-icon><FolderOpened /></el-icon><span>数据管理</span>
             </template>
-            <el-menu-item index="customers" :route="{ name: 'customers' }">号码数据</el-menu-item>
             <el-menu-item v-if="auth.isAdmin" index="files" :route="{ name: 'files' }">文件管理</el-menu-item>
-            <el-menu-item v-if="auth.isAdmin" index="proxies" :route="{ name: 'proxies' }">代理 IP 管理</el-menu-item>
+            <el-menu-item index="phones" :route="{ name: 'phones' }">号码数据</el-menu-item>
+            <el-menu-item index="materials" :route="{ name: 'materials' }">文本数据</el-menu-item>
+            <el-menu-item v-if="auth.isAdmin" index="proxies" :route="{ name: 'proxies' }">代理IP管理</el-menu-item>
+            <el-menu-item index="customers" :route="{ name: 'customers' }">客户管理（leads）</el-menu-item>
           </el-sub-menu>
         </el-menu>
       </el-scrollbar>
@@ -181,6 +183,7 @@ const PARENT = {
   'audit-logs': '日志记录',
   agents: '客服中心',
   customers: '数据管理', files: '数据管理', proxies: '数据管理',
+  phones: '数据管理', materials: '数据管理',
 }
 const crumbs = computed(() => {
   const parts = []

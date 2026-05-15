@@ -9,6 +9,7 @@ class ProxyEndpoint(Base, TimestampMixin):
     __tablename__ = "proxy_endpoints"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("proxy_groups.id"), index=True)
     name: Mapped[str] = mapped_column(String(120), index=True)
     protocol: Mapped[str] = mapped_column(String(20), default="socks5")
     host: Mapped[str] = mapped_column(String(255))

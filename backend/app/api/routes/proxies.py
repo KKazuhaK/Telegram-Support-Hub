@@ -24,6 +24,7 @@ class ProxyCreate(BaseModel):
     country: str | None = None
     max_accounts: int | None = None
     remark: str | None = None
+    group_id: int | None = None
 
 
 class ProxyUpdate(BaseModel):
@@ -37,11 +38,15 @@ class ProxyUpdate(BaseModel):
     status: str | None = None
     max_accounts: int | None = None
     remark: str | None = None
+    group_id: int | None = None
 
 
 @router.get("")
-def list_proxies(db: DbSession, _: AdminDep) -> list[dict]:
-    return list_dict(list(db.scalars(select(ProxyEndpoint).order_by(ProxyEndpoint.id.desc()))))
+def list_proxies(db: DbSession, _: AdminDep, group_id: int | None = None) -> list[dict]:
+    stmt = select(ProxyEndpoint).order_by(ProxyEndpoint.id.desc())
+    if group_id is not None:
+        stmt = stmt.where(ProxyEndpoint.group_id == group_id)
+    return list_dict(list(db.scalars(stmt)))
 
 
 @router.post("")
@@ -56,6 +61,7 @@ def create_proxy(payload: ProxyCreate, db: DbSession, admin: AdminDep) -> dict:
         country=payload.country,
         max_accounts=payload.max_accounts,
         remark=payload.remark,
+        group_id=payload.group_id,
     )
     db.add(proxy)
     db.flush()
