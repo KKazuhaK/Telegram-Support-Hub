@@ -26,6 +26,8 @@ const routes = [
       { path: 'task-stats', name: 'task-stats', component: () => import('@/views/TaskStats.vue'), meta: { title: '任务统计' } },
 
       // 日志记录
+      { path: 'task-log', name: 'task-log', component: () => import('@/views/TaskLog.vue'), meta: { title: '任务日志', adminOnly: true } },
+      { path: 'io-log', name: 'io-log', component: () => import('@/views/ImportExportLog.vue'), meta: { title: '导入导出', adminOnly: true } },
       { path: 'audit-logs', name: 'audit-logs', component: () => import('@/views/AuditLogs.vue'), meta: { title: '审计日志', adminOnly: true } },
 
       // 客服中心

@@ -60,6 +60,8 @@
               <template #title>
                 <el-icon><Notebook /></el-icon><span>日志记录</span>
               </template>
+              <el-menu-item index="task-log" :route="{ name: 'task-log' }">任务日志</el-menu-item>
+              <el-menu-item index="io-log" :route="{ name: 'io-log' }">导入导出</el-menu-item>
               <el-menu-item index="audit-logs" :route="{ name: 'audit-logs' }">审计日志</el-menu-item>
             </el-sub-menu>
 
@@ -196,7 +198,7 @@ function routeNameToComponent(name) {
 const PARENT = {
   'batch-operations': '任务管理', 'modify-info': '任务管理',
   campaigns: '任务管理', templates: '任务管理', replies: '任务管理',
-  'audit-logs': '日志记录',
+  'task-log': '日志记录', 'io-log': '日志记录', 'audit-logs': '日志记录',
   agents: '客服中心',
   customers: '数据管理', files: '数据管理', proxies: '数据管理',
   phones: '数据管理', materials: '数据管理',
