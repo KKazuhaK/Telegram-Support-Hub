@@ -30,3 +30,12 @@ def create_db_and_tables() -> None:
     )
 
     Base.metadata.create_all(bind=engine)
+
+    if settings.auto_migrate_columns:
+        import logging
+        from backend.app.core.schema_sync import ensure_columns_present
+        added = ensure_columns_present(engine, Base.metadata)
+        if added:
+            logging.getLogger(__name__).info(
+                "schema-sync added %d columns: %s", len(added), added,
+            )

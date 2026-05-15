@@ -22,6 +22,13 @@ class Settings:
     app_jwt_secret: str = os.getenv("APP_JWT_SECRET", os.getenv("APP_SECRET", "dev-secret"))
     app_jwt_ttl_minutes: int = _int_env("APP_JWT_TTL_MINUTES", 720)
     auto_create_tables: bool = os.getenv("AUTO_CREATE_TABLES", "true").lower() == "true"
+    # On startup, ALTER TABLE ADD COLUMN for any column declared in models
+    # but missing in the live DB. Default tracks AUTO_CREATE_TABLES so an
+    # operator who opts into auto schema gets the additive migrations too.
+    auto_migrate_columns: bool = os.getenv(
+        "AUTO_MIGRATE_COLUMNS",
+        os.getenv("AUTO_CREATE_TABLES", "true"),
+    ).lower() == "true"
 
     mysql_host: str = os.getenv("MYSQL_HOST", "127.0.0.1")
     mysql_port: int = _int_env("MYSQL_PORT", 3306)

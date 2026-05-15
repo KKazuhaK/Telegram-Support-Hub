@@ -115,7 +115,7 @@ Phase 6（产品化）：R12 → R13 → R14
 | 项 | 说明 | 何时还 |
 | --- | --- | --- |
 | 前端 chunk 体积 1MB+ | `vite.config.js` 配 `build.rollupOptions.output.manualChunks` 把 Element Plus / ECharts 拆出 | R8 落地时一并做 |
-| Alembic 没有真实增量迁移 | 第一版用 `Base.metadata.create_all`，新加字段后没有 `op.add_column` 脚本 | R1 改 schema 时强制走 alembic autogenerate |
+| Alembic 没有真实增量迁移 | 第一版用 `Base.metadata.create_all`，新加字段后没有 `op.add_column` 脚本。已加 `AUTO_MIGRATE_COLUMNS` 启动时同步缺失列；仍不能处理改类型/删字段 | 等首次需要"非加列"的 schema 变更时引入完整 alembic |
 | WebSocket 没有自动重连 | 前端 `Replies.vue` 简单实现，长连断了不重连 | R10 客服中心时一并加 exponential backoff |
 | Celery `broker_connection_retry` 弃用警告 | 设 `broker_connection_retry_on_startup=True` | 顺手改，<5min |
 | 测试用 SQLite，生产是 MariaDB | 二者 JSON 字段语义略有差异 | R1 改 schema 时加 MariaDB CI matrix |
