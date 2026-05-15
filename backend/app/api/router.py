@@ -9,6 +9,7 @@ from backend.app.api.routes import (
     campaigns,
     customers,
     export,
+    files,
     proxies,
     stats,
     templates,
@@ -27,4 +28,5 @@ api_router.include_router(campaigns.router, prefix="/campaigns", tags=["campaign
 api_router.include_router(stats.router, prefix="/statistics", tags=["statistics"])
 api_router.include_router(audit.router, prefix="/audit-logs", tags=["audit-logs"])
 api_router.include_router(export.router, prefix="/export", tags=["export"])
+api_router.include_router(files.router, prefix="/files", tags=["files"])
 api_router.include_router(ws.router, prefix="/ws", tags=["ws"])

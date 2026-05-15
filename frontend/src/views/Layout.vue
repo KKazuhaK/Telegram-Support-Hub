@@ -12,41 +12,59 @@
             <template #title>仪表盘</template>
           </el-menu-item>
 
-          <el-sub-menu index="account-mgmt">
-            <template #title>
-              <el-icon><User /></el-icon><span>账号管理</span>
-            </template>
-            <el-menu-item index="accounts" :route="{ name: 'accounts' }">TG 账号</el-menu-item>
-            <el-menu-item index="account-groups" :route="{ name: 'account-groups' }">账号分组</el-menu-item>
-            <el-menu-item index="proxies" :route="{ name: 'proxies' }">网络代理</el-menu-item>
-          </el-sub-menu>
+          <el-menu-item index="accounts" :route="{ name: 'accounts' }">
+            <el-icon><User /></el-icon>
+            <template #title>账号管理</template>
+          </el-menu-item>
 
-          <el-sub-menu index="data-mgmt">
-            <template #title>
-              <el-icon><FolderOpened /></el-icon><span>数据管理</span>
-            </template>
-            <el-menu-item index="customers" :route="{ name: 'customers' }">客户管理</el-menu-item>
-            <el-menu-item index="friends" :route="{ name: 'friends' }">好友列表</el-menu-item>
-            <el-menu-item index="templates" :route="{ name: 'templates' }">消息模板</el-menu-item>
-          </el-sub-menu>
+          <el-menu-item index="account-groups" :route="{ name: 'account-groups' }">
+            <el-icon><Collection /></el-icon>
+            <template #title>账号分组</template>
+          </el-menu-item>
+
+          <el-menu-item index="friends" :route="{ name: 'friends' }">
+            <el-icon><Avatar /></el-icon>
+            <template #title>好友列表</template>
+          </el-menu-item>
 
           <el-sub-menu index="task-mgmt">
             <template #title>
               <el-icon><Promotion /></el-icon><span>任务管理</span>
             </template>
             <el-menu-item index="campaigns" :route="{ name: 'campaigns' }">群发任务</el-menu-item>
+            <el-menu-item index="templates" :route="{ name: 'templates' }">消息模板</el-menu-item>
             <el-menu-item index="replies" :route="{ name: 'replies' }">回复管理</el-menu-item>
           </el-sub-menu>
 
+          <el-menu-item index="task-stats" :route="{ name: 'task-stats' }">
+            <el-icon><PieChart /></el-icon>
+            <template #title>任务统计</template>
+          </el-menu-item>
+
           <template v-if="auth.isAdmin">
+            <el-sub-menu index="log-mgmt">
+              <template #title>
+                <el-icon><Notebook /></el-icon><span>日志记录</span>
+              </template>
+              <el-menu-item index="audit-logs" :route="{ name: 'audit-logs' }">审计日志</el-menu-item>
+            </el-sub-menu>
+
             <el-sub-menu index="staff-mgmt">
               <template #title>
                 <el-icon><UserFilled /></el-icon><span>客服中心</span>
               </template>
               <el-menu-item index="agents" :route="{ name: 'agents' }">客服账号</el-menu-item>
-              <el-menu-item index="audit-logs" :route="{ name: 'audit-logs' }">审计日志</el-menu-item>
             </el-sub-menu>
           </template>
+
+          <el-sub-menu index="data-mgmt">
+            <template #title>
+              <el-icon><FolderOpened /></el-icon><span>数据管理</span>
+            </template>
+            <el-menu-item index="customers" :route="{ name: 'customers' }">号码数据</el-menu-item>
+            <el-menu-item v-if="auth.isAdmin" index="files" :route="{ name: 'files' }">文件管理</el-menu-item>
+            <el-menu-item v-if="auth.isAdmin" index="proxies" :route="{ name: 'proxies' }">代理 IP 管理</el-menu-item>
+          </el-sub-menu>
         </el-menu>
       </el-scrollbar>
     </el-aside>
@@ -133,6 +151,7 @@ import http from '@/api/http'
 import {
   Odometer, User, UserFilled, FolderOpened, Promotion,
   Fold, Expand, FullScreen, ArrowDown,
+  Collection, Avatar, PieChart, Notebook,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -158,10 +177,10 @@ function routeNameToComponent(name) {
 }
 
 const PARENT = {
-  accounts: '账号管理', 'account-groups': '账号管理', proxies: '账号管理',
-  customers: '数据管理', friends: '数据管理', templates: '数据管理',
-  campaigns: '任务管理', replies: '任务管理',
-  agents: '客服中心', 'audit-logs': '客服中心',
+  campaigns: '任务管理', templates: '任务管理', replies: '任务管理',
+  'audit-logs': '日志记录',
+  agents: '客服中心',
+  customers: '数据管理', files: '数据管理', proxies: '数据管理',
 }
 const crumbs = computed(() => {
   const parts = []
