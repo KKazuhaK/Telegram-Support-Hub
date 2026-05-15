@@ -1,5 +1,6 @@
 from backend.app.models.account import Account, AccountGroup, AccountGroupMember
 from backend.app.models.agent import SupportAgent, SupportAgentGroupPermission
+from backend.app.models.audit import AuditLog
 from backend.app.models.campaign import Campaign
 from backend.app.models.customer import Customer, Friend
 from backend.app.models.message import MessageRecord
@@ -11,6 +12,7 @@ __all__ = [
     "AccountGroup",
     "AccountGroupMember",
     "AccountProxyLog",
+    "AuditLog",
     "Campaign",
     "Customer",
     "Friend",

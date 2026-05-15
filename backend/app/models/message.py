@@ -26,3 +26,5 @@ class MessageRecord(Base, TimestampMixin):
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     locked_by: Mapped[str | None] = mapped_column(String(120))
     locked_at: Mapped[str | None] = mapped_column(String(64))
+    external_message_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    target_tg_user_id: Mapped[str | None] = mapped_column(String(64), index=True)

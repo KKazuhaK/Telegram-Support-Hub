@@ -1,4 +1,34 @@
 services:
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MARIADB_DATABASE: ${MYSQL_DATABASE:-tg_support_hub}
+      MARIADB_USER: ${MYSQL_USER:-tg_support}
+      MARIADB_PASSWORD: ${MYSQL_PASSWORD:-tg_support}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_uca1400_ai_ci
+    volumes:
+      - ./data/mariadb:/var/lib/mysql
+    ports:
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-redis}"]
+    volumes:
+      - ./data/redis:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    restart: unless-stopped
+
   backend-api:
     build: .
     env_file:
@@ -8,6 +38,11 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -19,6 +54,11 @@ services:
     command: celery -A backend.app.workers.celery_app worker -Q send -n send@%h --loglevel=INFO
     volumes:
       - ./data:/app/data
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -30,6 +70,27 @@ services:
     command: celery -A backend.app.workers.celery_app worker -Q account -n account@%h --loglevel=INFO
     volumes:
       - ./data:/app/data
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  worker-listen:
+    build: .
+    env_file:
+      - .env
+    command: python -m backend.app.workers.listen_worker
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -41,6 +102,19 @@ services:
     command: celery -A backend.app.workers.celery_app beat --loglevel=INFO
     volumes:
       - ./data:/app/data
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend-api
+    ports:
+      - "8080:80"
     restart: unless-stopped

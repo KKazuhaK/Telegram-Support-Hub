@@ -8,22 +8,31 @@ from sqlalchemy.engine import URL
 load_dotenv()
 
 
+def _int_env(key: str, default: int) -> int:
+    try:
+        return int(os.getenv(key, str(default)))
+    except ValueError:
+        return default
+
+
 class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     app_name: str = os.getenv("APP_NAME", "TG Support Hub")
     app_secret: str = os.getenv("APP_SECRET", "dev-secret")
+    app_jwt_secret: str = os.getenv("APP_JWT_SECRET", os.getenv("APP_SECRET", "dev-secret"))
+    app_jwt_ttl_minutes: int = _int_env("APP_JWT_TTL_MINUTES", 720)
     auto_create_tables: bool = os.getenv("AUTO_CREATE_TABLES", "true").lower() == "true"
 
     mysql_host: str = os.getenv("MYSQL_HOST", "127.0.0.1")
-    mysql_port: int = int(os.getenv("MYSQL_PORT", "3306"))
+    mysql_port: int = _int_env("MYSQL_PORT", 3306)
     mysql_database: str = os.getenv("MYSQL_DATABASE", "tg_support_hub")
     mysql_user: str = os.getenv("MYSQL_USER", "root")
     mysql_password: str = os.getenv("MYSQL_PASSWORD", "")
 
     redis_host: str = os.getenv("REDIS_HOST", "127.0.0.1")
-    redis_port: int = int(os.getenv("REDIS_PORT", "6379"))
+    redis_port: int = _int_env("REDIS_PORT", 6379)
     redis_password: str = os.getenv("REDIS_PASSWORD", "")
-    redis_db: int = int(os.getenv("REDIS_DB", "0"))
+    redis_db: int = _int_env("REDIS_DB", 0)
 
     telegram_api_id: str = os.getenv("TELEGRAM_API_ID", "")
     telegram_api_hash: str = os.getenv("TELEGRAM_API_HASH", "")
@@ -31,6 +40,10 @@ class Settings:
     session_dir: Path = Path(os.getenv("SESSION_DIR", "./data/sessions"))
     upload_dir: Path = Path(os.getenv("UPLOAD_DIR", "./data/uploads"))
     log_dir: Path = Path(os.getenv("LOG_DIR", "./data/logs"))
+
+    dispatch_batch_size: int = _int_env("DISPATCH_BATCH_SIZE", 50)
+    dispatch_lock_ttl_padding: int = _int_env("DISPATCH_LOCK_TTL_PADDING", 30)
+    max_failed_attempts: int = _int_env("MAX_FAILED_ATTEMPTS", 3)
 
     @cached_property
     def database_url(self) -> URL:

@@ -7,10 +7,12 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from backend.app.api.deps import DbSession
+from backend.app.api.deps import AdminDep, CurrentUserDep, DbSession
 from backend.app.core.config import settings
 from backend.app.models.account import Account, AccountGroup, AccountGroupMember
 from backend.app.models.proxy import AccountProxyLog
+from backend.app.services.audit import write_audit
+from backend.app.services.proxy_pool import PoolError, auto_assign_proxy
 from backend.app.services.serializers import list_dict, to_dict
 
 router = APIRouter()
@@ -43,14 +45,34 @@ def ensure_default_group(db: DbSession) -> AccountGroup:
     return group
 
 
+def _filter_account_query(stmt, user):
+    if user.is_admin:
+        return stmt
+    group_ids = user.visible_group_ids()
+    if not group_ids:
+        return stmt.where(Account.id == -1)
+    member_subq = select(AccountGroupMember.account_id).where(AccountGroupMember.group_id.in_(group_ids))
+    return stmt.where(Account.id.in_(member_subq))
+
+
+def _ensure_account_visible(db, user, account: Account) -> None:
+    if user.is_admin:
+        return
+    member_ids = [m.group_id for m in db.scalars(
+        select(AccountGroupMember).where(AccountGroupMember.account_id == account.id)
+    )]
+    if not set(member_ids).intersection(user.visible_group_ids()):
+        raise HTTPException(status_code=403, detail="account not in your visible groups")
+
+
 @router.get("")
-def list_accounts(db: DbSession) -> list[dict]:
-    accounts = list(db.scalars(select(Account).order_by(Account.id.desc())))
-    return list_dict(accounts)
+def list_accounts(db: DbSession, user: CurrentUserDep) -> list[dict]:
+    stmt = _filter_account_query(select(Account).order_by(Account.id.desc()), user)
+    return list_dict(list(db.scalars(stmt)))
 
 
 @router.post("/import-zip")
-async def import_zip(db: DbSession, sessions: UploadFile = File(...)) -> dict:
+async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File(...)) -> dict:
     if not sessions.filename or not sessions.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="zip file required")
 
@@ -90,24 +112,29 @@ async def import_zip(db: DbSession, sessions: UploadFile = File(...)) -> dict:
                 account.status = "imported"
         imported.append({"user_id": user_id, "file": info.filename})
 
+    write_audit(db, actor=admin, action="account.import_zip",
+                detail={"imported": len(imported), "skipped": len(skipped)})
     db.commit()
     return {"imported": imported, "skipped": skipped}
 
 
 @router.patch("/{account_id}")
-def update_account(account_id: int, payload: AccountUpdate, db: DbSession) -> dict:
+def update_account(account_id: int, payload: AccountUpdate, db: DbSession, admin: AdminDep) -> dict:
     account = db.get(Account, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="account not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    values = payload.model_dump(exclude_unset=True)
+    for key, value in values.items():
         setattr(account, key, value)
+    write_audit(db, actor=admin, action="account.update",
+                target_type="account", target_id=account.id, detail=values)
     db.commit()
     db.refresh(account)
     return to_dict(account)
 
 
 @router.post("/{account_id}/proxy")
-def bind_proxy(account_id: int, payload: AccountProxyBind, db: DbSession) -> dict:
+def bind_proxy(account_id: int, payload: AccountProxyBind, db: DbSession, admin: AdminDep) -> dict:
     account = db.get(Account, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="account not found")
@@ -120,21 +147,50 @@ def bind_proxy(account_id: int, payload: AccountProxyBind, db: DbSession) -> dic
             new_proxy_id=payload.proxy_id,
             action="bind" if old_proxy_id is None else "switch",
             reason=payload.reason,
+            created_by=admin.username,
         )
     )
+    write_audit(db, actor=admin, action="account.proxy_bind",
+                target_type="account", target_id=account.id,
+                detail={"old": old_proxy_id, "new": payload.proxy_id, "reason": payload.reason})
+    db.commit()
+    db.refresh(account)
+    return to_dict(account)
+
+
+@router.post("/{account_id}/proxy/auto")
+def auto_bind_proxy(account_id: int, db: DbSession, admin: AdminDep, prefer_country: str | None = None) -> dict:
+    account = db.get(Account, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="account not found")
+    old_proxy_id = account.proxy_id
+    try:
+        proxy = auto_assign_proxy(db, account, prefer_country=prefer_country)
+    except PoolError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.add(AccountProxyLog(
+        account_id=account.id, old_proxy_id=old_proxy_id, new_proxy_id=proxy.id,
+        action="bind" if old_proxy_id is None else "switch",
+        reason="auto", created_by=admin.username,
+    ))
+    write_audit(db, actor=admin, action="account.proxy_auto_bind",
+                target_type="account", target_id=account.id,
+                detail={"old": old_proxy_id, "new": proxy.id, "prefer_country": prefer_country})
     db.commit()
     db.refresh(account)
     return to_dict(account)
 
 
 @router.delete("/{account_id}/proxy")
-def unbind_proxy(account_id: int, db: DbSession) -> dict:
+def unbind_proxy(account_id: int, db: DbSession, admin: AdminDep) -> dict:
     account = db.get(Account, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="account not found")
     old_proxy_id = account.proxy_id
     account.proxy_id = None
-    db.add(AccountProxyLog(account_id=account.id, old_proxy_id=old_proxy_id, action="unbind"))
+    db.add(AccountProxyLog(account_id=account.id, old_proxy_id=old_proxy_id, action="unbind", created_by=admin.username))
+    write_audit(db, actor=admin, action="account.proxy_unbind",
+                target_type="account", target_id=account.id, detail={"old": old_proxy_id})
     db.commit()
     db.refresh(account)
     return to_dict(account)

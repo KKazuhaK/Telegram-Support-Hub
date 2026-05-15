@@ -1,9 +1,8 @@
-import os
 import unittest
 
-from fastapi.testclient import TestClient
+import tests.support  # noqa: F401  configures env
 
-os.environ.setdefault("AUTO_CREATE_TABLES", "false")
+from fastapi.testclient import TestClient
 
 from backend.app.main import app
 

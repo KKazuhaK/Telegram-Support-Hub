@@ -4,9 +4,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from backend.app.api.deps import DbSession
+from backend.app.api.deps import AdminDep, DbSession
 from backend.app.core.crypto import encrypt_secret
 from backend.app.models.proxy import ProxyEndpoint
+from backend.app.services.audit import write_audit
 from backend.app.services.proxy_checker import check_tcp
 from backend.app.services.serializers import list_dict, to_dict
 
@@ -39,12 +40,12 @@ class ProxyUpdate(BaseModel):
 
 
 @router.get("")
-def list_proxies(db: DbSession) -> list[dict]:
+def list_proxies(db: DbSession, _: AdminDep) -> list[dict]:
     return list_dict(list(db.scalars(select(ProxyEndpoint).order_by(ProxyEndpoint.id.desc()))))
 
 
 @router.post("")
-def create_proxy(payload: ProxyCreate, db: DbSession) -> dict:
+def create_proxy(payload: ProxyCreate, db: DbSession, admin: AdminDep) -> dict:
     proxy = ProxyEndpoint(
         name=payload.name,
         protocol=payload.protocol,
@@ -57,13 +58,16 @@ def create_proxy(payload: ProxyCreate, db: DbSession) -> dict:
         remark=payload.remark,
     )
     db.add(proxy)
+    db.flush()
+    write_audit(db, actor=admin, action="proxy.create", target_type="proxy",
+                target_id=proxy.id, detail={"host": proxy.host, "port": proxy.port, "protocol": proxy.protocol})
     db.commit()
     db.refresh(proxy)
     return to_dict(proxy)
 
 
 @router.patch("/{proxy_id}")
-def update_proxy(proxy_id: int, payload: ProxyUpdate, db: DbSession) -> dict:
+def update_proxy(proxy_id: int, payload: ProxyUpdate, db: DbSession, admin: AdminDep) -> dict:
     proxy = db.get(ProxyEndpoint, proxy_id)
     if not proxy:
         raise HTTPException(status_code=404, detail="proxy not found")
@@ -72,13 +76,16 @@ def update_proxy(proxy_id: int, payload: ProxyUpdate, db: DbSession) -> dict:
         values["password_encrypted"] = encrypt_secret(values.pop("password"))
     for key, value in values.items():
         setattr(proxy, key, value)
+    safe_detail = {k: ("***" if k == "password_encrypted" else v) for k, v in values.items()}
+    write_audit(db, actor=admin, action="proxy.update", target_type="proxy",
+                target_id=proxy.id, detail=safe_detail)
     db.commit()
     db.refresh(proxy)
     return to_dict(proxy)
 
 
 @router.post("/{proxy_id}/check")
-def check_proxy(proxy_id: int, db: DbSession) -> dict:
+def check_proxy(proxy_id: int, db: DbSession, _: AdminDep) -> dict:
     proxy = db.get(ProxyEndpoint, proxy_id)
     if not proxy:
         raise HTTPException(status_code=404, detail="proxy not found")

@@ -24,6 +24,6 @@ def get_db() -> Generator[Session, None, None]:
 
 def create_db_and_tables() -> None:
     settings.ensure_directories()
-    from backend.app.models import account, agent, campaign, customer, message, proxy, template  # noqa: F401
+    from backend.app.models import account, agent, audit, campaign, customer, message, proxy, template  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

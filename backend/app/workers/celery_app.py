@@ -15,18 +15,24 @@ celery_app.conf.task_routes = {
     "backend.app.workers.account_tasks.*": {"queue": "account"},
 }
 
+celery_app.conf.timezone = "UTC"
+
 celery_app.conf.beat_schedule = {
     "proxy-health-check-every-10-minutes": {
         "task": "backend.app.workers.account_tasks.check_all_proxies",
         "schedule": crontab(minute="*/10"),
     },
-    "account-health-check-every-15-minutes": {
+    "session-validation-every-15-minutes": {
         "task": "backend.app.workers.account_tasks.validate_all_sessions",
         "schedule": crontab(minute="*/15"),
     },
     "dispatch-send-queue-every-minute": {
         "task": "backend.app.workers.send_tasks.dispatch_send_queue",
         "schedule": crontab(minute="*"),
+    },
+    "reset-daily-quota-at-midnight-utc": {
+        "task": "backend.app.workers.send_tasks.reset_daily_quota",
+        "schedule": crontab(minute="0", hour="0"),
     },
 }
 
