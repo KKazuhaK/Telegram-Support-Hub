@@ -371,7 +371,28 @@ async function uploadZip({ file }) {
   const { data } = await http.post('/accounts/import-zip', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
-  ElMessage.success(`导入 ${data.imported.length} 个，跳过 ${data.skipped.length} 个`)
+  const ok = data.imported.length
+  const skipped = data.skipped || []
+  if (skipped.length) {
+    // Surface per-entry reasons so the operator can self-diagnose (esp.
+    // for tdata zips where conversion can fail per-phone). HTML mode
+    // because ElMessageBox plain text doesn't wrap long messages well.
+    const esc = (s) => String(s ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const reasons = skipped.slice(0, 10)
+      .map((s) => `<div style="margin-bottom:6px;"><b>${esc(s.file)}</b><br><span style="color:#888;">${esc(s.reason)}</span></div>`)
+      .join('')
+    const more = skipped.length > 10
+      ? `<div style="color:#aaa; font-size:12px;">… 还有 ${skipped.length - 10} 条</div>`
+      : ''
+    ElMessageBox.alert(
+      `<div style="font-size:13px;">${reasons}${more}</div>`,
+      `导入完成：成功 ${ok} 个，跳过 ${skipped.length} 个`,
+      { confirmButtonText: '知道了', dangerouslyUseHTMLString: true },
+    )
+  } else {
+    ElMessage.success(`导入 ${ok} 个`)
+  }
   await load()
 }
 
