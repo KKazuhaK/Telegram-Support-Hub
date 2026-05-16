@@ -12,8 +12,12 @@ from backend.app.core.config import settings
 from backend.app.models.account import Account, AccountGroup, AccountGroupMember
 from backend.app.models.proxy import AccountProxyLog
 from backend.app.services.audit import write_audit
+from backend.app.services.port_quota import (
+    QuotaError, check_quota_for_activation, recompute_merchant_ports,
+)
 from backend.app.services.proxy_pool import PoolError, auto_assign_proxy
 from backend.app.services.serializers import list_dict, to_dict
+from backend.app.services.tenant_scope import apply_merchant_scope
 
 router = APIRouter()
 
@@ -70,8 +74,13 @@ def ensure_default_group(db: DbSession) -> AccountGroup:
     return group
 
 
-def _filter_account_query(stmt, user):
-    if user.is_admin:
+def _filter_account_query(stmt, user, db=None):
+    # Multi-tenant scope first (merchant / business_agent only see their own).
+    if db is not None:
+        stmt = apply_merchant_scope(stmt, user, db, Account)
+    if user.is_admin or user.actor_kind != "support_agent":
+        # Tenant actors don't go through the per-group permission system —
+        # the merchant_id filter is the boundary.
         return stmt
     group_ids = user.visible_group_ids()
     if not group_ids:
@@ -109,7 +118,7 @@ def list_accounts(
     offset: int = 0,
 ) -> list[dict]:
     stmt = select(Account).order_by(Account.id.desc())
-    stmt = _filter_account_query(stmt, user)
+    stmt = _filter_account_query(stmt, user, db)
     if status:
         stmt = stmt.where(Account.status == status)
     if enabled is not None:
@@ -198,7 +207,25 @@ def batch_update_accounts(payload: AccountBatch, db: DbSession, admin: AdminDep)
             raise HTTPException(status_code=400, detail="目标账号分组不存在")
 
     rows = list(db.scalars(select(Account).where(Account.id.in_(payload.ids))))
+
+    # R2: enforce port quota when activating accounts under a merchant.
+    # Group the to-be-activated rows by merchant_id and check each merchant
+    # can accommodate the delta before mutating anything.
+    if payload.status == "active":
+        per_merchant_delta: dict[int, int] = {}
+        for acc in rows:
+            if acc.merchant_id and acc.status != "active":
+                per_merchant_delta[acc.merchant_id] = per_merchant_delta.get(acc.merchant_id, 0) + 1
+        for merchant_id, delta in per_merchant_delta.items():
+            try:
+                check_quota_for_activation(db, merchant_id, additional=delta)
+            except QuotaError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    affected_merchants: set[int] = set()
     for acc in rows:
+        if payload.status is not None and acc.merchant_id and acc.status != payload.status:
+            affected_merchants.add(acc.merchant_id)
         if payload.enabled is not None:
             acc.enabled = payload.enabled
         if payload.status is not None:
@@ -241,6 +268,11 @@ def batch_update_accounts(payload: AccountBatch, db: DbSession, admin: AdminDep)
         },
     )
     db.commit()
+
+    # Sync ports_used for any merchant whose active count just changed.
+    for merchant_id in affected_merchants:
+        recompute_merchant_ports(db, merchant_id)
+
     return {"updated": len(rows)}
 
 

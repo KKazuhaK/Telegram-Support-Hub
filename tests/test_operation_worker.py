@@ -167,6 +167,49 @@ class ExecuteBatchOpTestCase(unittest.TestCase):
 
         self.assertEqual(captured["op"], "leave_group")
 
+    def test_appeal_mutual_passes_through(self) -> None:
+        # appeal_mutual asks Telegram to grant mutual-contact status by
+        # re-adding contacts. Worker just needs to dispatch the operation
+        # name and forward params.
+        group, accs = _seed(self.db, n_accounts=1)
+        cmp = _make_campaign(self.db, group.id, task_kind="batch_op",
+                             operation_target="appeal_mutual")
+
+        captured = {}
+
+        def fake_op(account, proxy, operation, params):
+            captured["op"] = operation
+            return _FakeOpResult(ok=True, detail="appealed 0 contacts")
+
+        with patch.object(execute_operation, "_run_operation", side_effect=fake_op):
+            result = execute_operation.execute_operation_campaign(cmp.id)
+
+        self.assertEqual(captured["op"], "appeal_mutual")
+        self.assertEqual(result["ok_count"], 1)
+
+    def test_modify_password_forwards_old_and_new(self) -> None:
+        # modify_password is a 2FA cloud-password change. The worker must
+        # forward both old_password and new_password from extra_params so
+        # the adapter can issue the SRP change.
+        group, accs = _seed(self.db, n_accounts=1)
+        cmp = _make_campaign(self.db, group.id, task_kind="modify_info",
+                             operation_target="modify_password",
+                             extra={"old_password": "old", "new_password": "new"})
+
+        captured = {}
+
+        def fake_op(account, proxy, operation, params):
+            captured["op"] = operation
+            captured["params"] = params
+            return _FakeOpResult(ok=True)
+
+        with patch.object(execute_operation, "_run_operation", side_effect=fake_op):
+            execute_operation.execute_operation_campaign(cmp.id)
+
+        self.assertEqual(captured["op"], "modify_password")
+        self.assertEqual(captured["params"]["old_password"], "old")
+        self.assertEqual(captured["params"]["new_password"], "new")
+
     def test_detect_mutual_passes_through(self) -> None:
         group, accs = _seed(self.db, n_accounts=1)
         cmp = _make_campaign(self.db, group.id, task_kind="batch_op",

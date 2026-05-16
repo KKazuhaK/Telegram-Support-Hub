@@ -20,6 +20,7 @@ class Customer(Base, TimestampMixin):
     last_read_at: Mapped[str | None] = mapped_column(String(64))
     last_reply_at: Mapped[str | None] = mapped_column(String(64))
     last_reply_text: Mapped[str | None] = mapped_column(Text)
+    merchant_id: Mapped[int | None] = mapped_column(ForeignKey("merchants.id"), index=True)
 
 
 class Friend(Base, TimestampMixin):

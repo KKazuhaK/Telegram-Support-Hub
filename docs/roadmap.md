@@ -57,11 +57,11 @@ PRD 描述的是一个**多租户商业系统**：总后台 → 商务代理 →
 
 | 编号 | 模块 | 状态 | 依赖 | 预估 | 完成判定 |
 | ---: | --- | --- | --- | --- | --- |
-| **R1** | **多层角色 + 商务代理 + 商户实体** | 🕒 | — | XL | 4 类角色登录可用，merchants 表 + business_agents 表落库，所有 list API 加 tenant_id 过滤；admin 仍能跨租户查看 |
-| **R2** | 端口资源 / 配额 | 🕒 | R1 | M | merchants 表带 `ports_total / ports_used / ports_expires_at / ports_reset_at`；账号上线时校验端口；过期自动锁号 |
-| **R3** | 商务代理 CRUD UI | 🚧 | R1 | M | 列表 + 新增/编辑（名称、密码、昵称、平台、Logo、域名、备注、状态）；列表筛选 |
-| **R4** | 商家账号 CRUD UI | 🚧 | R1 + R2 | M | 列表 + 新增/编辑 + 批量改客服权限；端口配额可视 |
-| **R5** | 任务管理三件套字段全量化 | 🚧 | — | L | **数据层 ✅** + **execute slice 1 ✅** + **execute slice 2 ✅** (2026-05-15)：6 个 Telethon RPC（delete_friend / leave_other_devices / modify_nickname / signature / username / **avatar**）；前端头像表单接通 R11 文件上传。**剩余**：leave_group / detect_mutual / appeal_mutual / modify_password。 |
+| **R1** | **多层角色 + 商务代理 + 商户实体** | ✅ | — | XL | slice 1（auth）：JWT 加 `actor_kind / actor_id`，新增 `/api/auth/business-login` + `/auth/merchant-login`，CurrentUser 扩展 actor_kind；slice 2（scope）：Account/AccountGroup/Customer/Campaign 加 `merchant_id` 列，`tenant_scope.apply_merchant_scope` 服务统一过滤，accounts/customers list 走 tenant scope。admin 仍跨租户。完成于 2026-05-15。 |
+| **R2** | 端口资源 / 配额 | ✅ | R1 | M | `port_quota` 服务：`recompute_merchant_ports`（按 active 数同步 ports_used）+ `check_quota_for_activation`（quota / 过期校验，0 = 不限）；accounts/batch 激活前按 merchant 分组校验，超额返回 409 中文提示。`ports_total=0` 视为不限避免锁老数据。完成于 2026-05-15（已配合 R14 的定时重置）。 |
+| **R3** | 商务代理 CRUD UI | 🚧 | R1 | M | 列表 + 表单已就位（admin 视图）；多租户视角下的"商务代理只见自己的客户"等过滤待 slice 3 |
+| **R4** | 商家账号 CRUD UI | 🚧 | R1 + R2 | M | 列表 + 新增/编辑 + 批量权限已上线；端口配额可视化（`ports_used / ports_total` 列）已有；商务代理视角下的范围过滤待 slice 3 |
+| **R5** | 任务管理三件套字段全量化 | ✅ | — | L | 数据层 + 4 个 execute slice：8 个 Telethon RPC（delete_friend / leave_other_devices / modify_nickname / signature / username / avatar / leave_group / detect_mutual / **appeal_mutual** / **modify_password**）。完成于 2026-05-15。 |
 | **R6** | 消息模板变量系统 | ✅ | — | M | 15+ 变量渲染 + 富文本 entity（UTF-16 offset 准确）+ 预览 API + 模板页双栏帮助。完成于 2026-05-15。 |
 | **R7** | 任务日志页 | ✅ | — | M | audit_logs 加 `action_prefix` 过滤；前端 任务日志（基于 message-details）+ 导入导出 两页 + 日志记录 子菜单 3 项。客户端 CSV 导出。完成于 2026-05-15。 |
 | **R8** | 任务统计图表 | ✅ | — | M | 后端 `/api/statistics/{timeseries,message-details}`；前端 ECharts 柱+折线图 + 5 项汇总徽章 + 时段缩略 + 状态/任务/账号/日期筛选；维度对比保留。完成于 2026-05-15。剩 R16 导出报表。 |
@@ -152,3 +152,7 @@ Phase 6（产品化）：R12 → R13 → R14
 - **2026-05-15** — R5.execute slice 3：leave_group / detect_mutual Telethon RPC + 测试覆盖（174 测试）。
 - **2026-05-15** — R12 i18n + 主题：vue-i18n（zh-CN/en-US）+ Pinia theme store + CSS variables 暗色覆盖 + topbar 切换按钮；R13 视觉抛光：Layout tabs 横向滚动 + 翻页按钮 + Telegram 风格品牌图标。
 - **2026-05-15** — R14 端口资源重置：`reset_merchant_ports` Celery beat 任务（每小时第 5 分钟）+ 4 项 TDD 覆盖（首跑初始化 / 周期到达清零 / 周期未到跳过 / 0 周期忽略）（178 测试）。
+- **2026-05-15** — R1 slice 1：多 actor 登录与 JWT 形态。新增 business-login / merchant-login 路由 + JWT 加 `actor_kind / actor_id`，CurrentUser dispatch 三种 actor（184 测试）。
+- **2026-05-15** — R1 slice 2：tenant scope 服务 + Account/AccountGroup/Customer/Campaign 增 `merchant_id` 列；accounts/customers list 走 `apply_merchant_scope`（merchant 仅见自己 / business_agent 见旗下所有商户 / admin 不变）（188 测试）。
+- **2026-05-15** — R2 端口配额：`port_quota` 服务（recompute + check）+ accounts/batch 激活前按商户分组校验，超额返回 409 中文提示；ports_total=0 视为无限避免锁老数据（196 测试）。
+- **2026-05-15** — R5.execute slice 4：appeal_mutual（AddContactRequest + add_phone_privacy_exception）+ modify_password（client.edit_2fa SRP 包装）（198 测试）。

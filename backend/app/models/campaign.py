@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Integer, String
+from sqlalchemy import ForeignKey, JSON, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.core.database import Base
@@ -39,3 +39,4 @@ class Campaign(Base, TimestampMixin):
     started_at: Mapped[str | None] = mapped_column(String(64))
     paused_at: Mapped[str | None] = mapped_column(String(64))
     completed_at: Mapped[str | None] = mapped_column(String(64))
+    merchant_id: Mapped[int | None] = mapped_column(ForeignKey("merchants.id"), index=True)

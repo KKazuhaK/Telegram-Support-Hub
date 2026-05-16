@@ -25,6 +25,8 @@ class Account(Base, TimestampMixin):
     country: Mapped[str | None] = mapped_column(String(8), index=True)
     remark: Mapped[str | None] = mapped_column(Text)
     avatar_status: Mapped[str | None] = mapped_column(String(32), index=True)
+    # Multi-tenant scope (R1). Null = legacy / admin-managed account.
+    merchant_id: Mapped[int | None] = mapped_column(ForeignKey("merchants.id"), index=True)
 
     proxy = relationship("ProxyEndpoint", back_populates="accounts")
     groups = relationship("AccountGroupMember", back_populates="account", cascade="all, delete-orphan")
@@ -40,6 +42,7 @@ class AccountGroup(Base, TimestampMixin):
     daily_limit: Mapped[int] = mapped_column(Integer, default=1000)
     sent_today: Mapped[int] = mapped_column(Integer, default=0)
     remark: Mapped[str | None] = mapped_column(Text)
+    merchant_id: Mapped[int | None] = mapped_column(ForeignKey("merchants.id"), index=True)
 
     members = relationship("AccountGroupMember", back_populates="group", cascade="all, delete-orphan")
 

@@ -10,6 +10,7 @@ from backend.app.services.audit import write_audit
 from backend.app.services.parsers import parse_customer_text
 from backend.app.services.permissions import permission_denied_detail
 from backend.app.services.serializers import list_dict, to_dict
+from backend.app.services.tenant_scope import apply_merchant_scope
 
 router = APIRouter()
 
@@ -57,10 +58,11 @@ def list_customers(
     db: DbSession, user: CurrentUserDep, status: str | None = None, limit: int = 100, offset: int = 0
 ) -> list[dict]:
     stmt = select(Customer).order_by(Customer.id.desc())
+    stmt = apply_merchant_scope(stmt, user, db, Customer)
     if status:
         stmt = stmt.where(Customer.status == status)
-    if not user.is_admin:
-        # only customers assigned to accounts within the user's visible groups
+    if user.actor_kind == "support_agent" and not user.is_admin:
+        # Support agent (non-admin): also constrained by group permission.
         member_subq = select(AccountGroupMember.account_id).where(
             AccountGroupMember.group_id.in_(user.visible_group_ids() or [-1])
         )

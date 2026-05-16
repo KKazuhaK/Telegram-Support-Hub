@@ -369,6 +369,46 @@ class TelegramAdapter:
                 detail=f"{len(mutual)} mutual / {len(users)} total contacts",
             )
 
+        if operation == "appeal_mutual":
+            # Ask Telegram to grant mutual-contact status by re-adding every
+            # existing contact with `add_phone_privacy_exception=True`. Some
+            # accounts will already be mutual; AddContactRequest is idempotent.
+            contacts = await client(functions.contacts.GetContactsRequest(hash=0))
+            users = getattr(contacts, "users", []) or []
+            appealed = 0
+            for u in users:
+                try:
+                    await client(functions.contacts.AddContactRequest(
+                        id=u, first_name=getattr(u, "first_name", "") or "",
+                        last_name=getattr(u, "last_name", "") or "",
+                        phone=getattr(u, "phone", "") or "",
+                        add_phone_privacy_exception=True,
+                    ))
+                    appealed += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("appeal_mutual failed for user %s: %s", u.id, exc)
+            return OperationResult(ok=True, detail=f"appealed {appealed}/{len(users)} contacts")
+
+        if operation == "modify_password":
+            # 2FA cloud-password change. Telethon's `edit_2fa` wraps the SRP
+            # exchange so we don't have to compute hashes by hand. To remove
+            # 2FA pass new_password=None.
+            old_pw = params.get("old_password")
+            new_pw = params.get("new_password")
+            if not new_pw:
+                return OperationResult(
+                    ok=False, error_code="missing_new_password",
+                    error_message="modify_password 需要 new_password",
+                )
+            try:
+                await client.edit_2fa(current_password=old_pw, new_password=new_pw)
+            except Exception as exc:  # password mismatch raises here
+                return OperationResult(
+                    ok=False, error_code=type(exc).__name__,
+                    error_message=str(exc),
+                )
+            return OperationResult(ok=True, detail="2fa password updated")
+
         if operation == "modify_avatar":
             file_path = params.get("file_path")
             if not file_path:
@@ -387,8 +427,6 @@ class TelegramAdapter:
             await client(functions.photos.UploadProfilePhotoRequest(file=uploaded))
             return OperationResult(ok=True, detail=f"avatar set from {p.name}")
 
-        # Operations not yet implemented: leave_group, detect_mutual,
-        # appeal_mutual, modify_password.
         return OperationResult(
             ok=False, error_code="not_implemented",
             error_message=f"operation '{operation}' not implemented yet",

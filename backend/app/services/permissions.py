@@ -36,6 +36,11 @@ class CurrentUser:
     role: str
     account_group_ids: list[int] = field(default_factory=list)
     permissions: list[SupportAgentGroupPermission] = field(default_factory=list)
+    # Multi-tenant discriminator (R1). For support_agent actors, actor_id
+    # equals agent_id and the existing role/permission flow applies. For
+    # business_agent / merchant actors, scope filtering takes over.
+    actor_kind: str = "support_agent"
+    actor_id: int = 0
 
     @property
     def is_admin(self) -> bool:
@@ -71,4 +76,26 @@ def load_current_user(db: Session, agent: SupportAgent) -> CurrentUser:
         role=agent.role or "agent",
         account_group_ids=group_ids,
         permissions=perms,
+        actor_kind="support_agent",
+        actor_id=agent.id,
+    )
+
+
+def load_business_agent_user(name: str, ba_id: int) -> CurrentUser:
+    return CurrentUser(
+        agent_id=0,
+        username=name,
+        role="business_agent",
+        actor_kind="business_agent",
+        actor_id=ba_id,
+    )
+
+
+def load_merchant_user(name: str, m_id: int) -> CurrentUser:
+    return CurrentUser(
+        agent_id=0,
+        username=name,
+        role="merchant",
+        actor_kind="merchant",
+        actor_id=m_id,
     )
