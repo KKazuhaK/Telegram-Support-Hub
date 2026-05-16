@@ -16,6 +16,9 @@ class MessageRecord(Base, TimestampMixin):
     phone: Mapped[str | None] = mapped_column(String(32), index=True)
     body_snapshot: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    # 'outbound' = sent by an operator/campaign; 'inbound' = received from
+    # the customer/friend (recorded by listen_worker for chat-history use).
+    direction: Mapped[str] = mapped_column(String(16), default="outbound", index=True)
     sent_at: Mapped[str | None] = mapped_column(String(64))
     read_at: Mapped[str | None] = mapped_column(String(64))
     replied_at: Mapped[str | None] = mapped_column(String(64))

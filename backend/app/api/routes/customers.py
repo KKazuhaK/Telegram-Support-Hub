@@ -1,10 +1,15 @@
+import asyncio
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from backend.app.api.deps import CurrentUserDep, DbSession
 from backend.app.models.account import Account, AccountGroupMember
 from backend.app.models.customer import Customer, Friend
+from backend.app.models.message import MessageRecord
+from backend.app.models.proxy import ProxyEndpoint
 from backend.app.services.assignment import assign_customers
 from backend.app.services.audit import write_audit
 from backend.app.services.parsers import parse_customer_text
@@ -14,6 +19,7 @@ from backend.app.services.tenant_scope import (
     apply_merchant_scope, can_access_row, can_write_tenant_data,
     default_merchant_id, visible_merchant_ids,
 )
+from backend.app.telegram import adapter as adapter_module
 
 router = APIRouter()
 
@@ -203,6 +209,112 @@ def list_friends(
         )
         stmt = stmt.where(Friend.account_id.in_(member_subq))
     return list_dict(list(db.scalars(stmt.offset(offset).limit(limit))))
+
+
+class ChatSendPayload(BaseModel):
+    account_id: int
+    text: str = Field(min_length=1, max_length=4000)
+
+
+@router.get("/{customer_id}/messages")
+def list_customer_messages(
+    customer_id: int, db: DbSession, user: CurrentUserDep,
+    limit: int = 200, offset: int = 0,
+) -> list[dict]:
+    """Conversation history (both directions) for a customer, ordered by
+    created_at ascending so the UI can append-from-bottom naturally."""
+    cust = db.get(Customer, customer_id)
+    if not cust or not can_access_row(user, db, cust):
+        raise HTTPException(status_code=404, detail="客户不存在")
+    stmt = (
+        select(MessageRecord)
+        .where(MessageRecord.customer_id == customer_id)
+        .order_by(MessageRecord.created_at.asc(), MessageRecord.id.asc())
+        .offset(offset).limit(limit)
+    )
+    return list_dict(list(db.scalars(stmt)))
+
+
+@router.post("/{customer_id}/messages")
+def send_customer_message(
+    customer_id: int, payload: ChatSendPayload,
+    db: DbSession, user: CurrentUserDep,
+) -> dict:
+    """Send a 1-on-1 reply to a customer via the chosen TG account.
+
+    Persists the outbound MessageRecord even on Telegram failure so the
+    operator has an audit trail of attempted replies. Cross-tenant
+    customers / accounts return 404 to hide existence.
+    """
+    cust = db.get(Customer, customer_id)
+    if not cust or not can_access_row(user, db, cust):
+        raise HTTPException(status_code=404, detail="客户不存在")
+    if not can_write_tenant_data(user):
+        raise HTTPException(status_code=403, detail=permission_denied_detail("can_send_message"))
+
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="消息内容不能为空")
+
+    account = db.get(Account, payload.account_id)
+    if not account or not can_access_row(user, db, account):
+        raise HTTPException(status_code=404, detail="TG 账号不存在")
+    if account.status != "active" or not account.enabled:
+        raise HTTPException(status_code=400, detail="TG 账号未启用或不在线")
+
+    # Persist the outbound row first (status=sending) so we have an id
+    # to update with the send result. This also gives the operator an
+    # audit trail when Telethon raises before returning.
+    now_iso = datetime.now(UTC).isoformat()
+    record = MessageRecord(
+        account_id=account.id,
+        customer_id=customer_id,
+        phone=cust.phone,
+        body_snapshot=text,
+        direction="outbound",
+        status="sending",
+    )
+    record.created_at = datetime.now(UTC)
+    db.add(record)
+    db.flush()
+
+    proxy = db.get(ProxyEndpoint, account.proxy_id) if account.proxy_id else None
+    adapter = adapter_module.get_adapter()
+
+    try:
+        result = asyncio.run(adapter.send_message(
+            account, phone=cust.phone, text=text, proxy=proxy,
+        ))
+    except Exception as exc:  # noqa: BLE001 — surface to operator below
+        record.status = "failed"
+        record.error_code = type(exc).__name__
+        record.error_message = str(exc)[:500]
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"Telegram 发送失败：{exc}") from exc
+
+    if result.ok:
+        record.status = "sent"
+        record.sent_at = now_iso
+        record.external_message_id = result.external_message_id
+        record.target_tg_user_id = result.target_tg_user_id
+    else:
+        record.status = "failed"
+        record.error_code = result.error_code
+        record.error_message = (result.error_message or "")[:500]
+
+    write_audit(db, actor=user, action="chat.send",
+                target_type="customer", target_id=customer_id,
+                detail={"account_id": account.id, "ok": result.ok,
+                        "error_code": result.error_code})
+    db.commit()
+    db.refresh(record)
+
+    if not result.ok:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Telegram 发送失败：{result.error_message or result.error_code}",
+        )
+    return to_dict(record)
 
 
 @router.post("/friends/sync")

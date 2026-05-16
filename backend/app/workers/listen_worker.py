@@ -52,8 +52,29 @@ async def _persist_reply(payload: dict) -> None:
             customer.last_message_at = received_at
             customer.status = "replied"
 
-        # 3. Bind reply to most recent outbound message in this conversation
-        match_q = select(MessageRecord).where(MessageRecord.account_id == account_id)
+        # 3. Persist the inbound message as its own MessageRecord row so
+        # the chat-history endpoint can render a real conversation
+        # (out, in, out, in, ...) rather than only showing campaigns.
+        inbound = MessageRecord(
+            account_id=account_id,
+            customer_id=customer.id if customer else None,
+            phone=phone,
+            target_tg_user_id=tg_user_id,
+            body_snapshot=text,
+            direction="inbound",
+            status="received",
+            sent_at=received_at,
+        )
+        db.add(inbound)
+
+        # 4. ALSO bind the reply to the most recent outbound row in this
+        # conversation (legacy behavior — campaign reply_count + UI rely
+        # on the outbound row's replied_at/reply_text).
+        match_q = (
+            select(MessageRecord)
+            .where(MessageRecord.account_id == account_id)
+            .where(MessageRecord.direction == "outbound")
+        )
         if tg_user_id:
             match_q = match_q.where(MessageRecord.target_tg_user_id == tg_user_id)
         elif phone:
