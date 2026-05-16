@@ -237,10 +237,12 @@ def list_accounts(
         stmt = stmt.where(Account.id.in_(
             select(AccountGroupMember.account_id).where(AccountGroupMember.group_id == group_id)
         ))
-    rows = list_dict(list(db.scalars(stmt.offset(offset).limit(limit))))
-    # Tenant actors (merchant / business_agent) must not see TG health
-    # fields — that's the support team's view. See tenant_scope.py.
-    return [sanitize_account_for_tenant(user, r) for r in rows]
+    # TG inventory is back-office only — tenants (merchant /
+    # business_agent) get an empty list regardless of scope matches.
+    # Don't expose how many TGs exist, their state, or even existence.
+    if user.actor_kind != "support_agent":
+        return []
+    return list_dict(list(db.scalars(stmt.offset(offset).limit(limit))))
 
 
 @router.post("/import-zip")

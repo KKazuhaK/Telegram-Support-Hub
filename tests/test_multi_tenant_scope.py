@@ -65,7 +65,10 @@ class AccountTenantScopeTestCase(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()["access_token"]
 
-    def test_merchant_sees_only_own_accounts(self) -> None:
+    def test_merchant_sees_no_accounts(self) -> None:
+        # TG account list is back-office only — tenants get [] regardless
+        # of merchant_id matches. Override the older "see only own" rule
+        # because the operator decided TG inventory is fully hidden.
         ba, other_ba, m1, m2 = _seed_two_merchants(self.db)
         a1 = Account(tg_user_id="m1-acc", session_path="/tmp/m1.session",
                      status="active", enabled=True, merchant_id=m1.id)
@@ -77,32 +80,27 @@ class AccountTenantScopeTestCase(unittest.TestCase):
         token = self._login("/api/auth/merchant-login", "m-1", "pw")
         r = client.get("/api/accounts", headers={"Authorization": f"Bearer {token}"})
         self.assertEqual(r.status_code, 200, r.text)
-        ids = {row["tg_user_id"] for row in r.json()}
-        self.assertEqual(ids, {"m1-acc"})
+        self.assertEqual(r.json(), [])
 
-    def test_business_agent_sees_all_owned_merchant_accounts(self) -> None:
+    def test_business_agent_sees_no_accounts(self) -> None:
+        # Same blanket invisibility for business_agent. They oversee the
+        # commercial relationship; TG infra is platform admin's concern.
         ba, other_ba, m1, m2 = _seed_two_merchants(self.db)
-        # 3rd merchant also under ba so we exercise the "in_" path.
         m3 = Merchant(name="m-3", password_hash=hash_password("pw"), status=True,
                       business_agent_id=ba.id)
         self.db.add(m3)
-        self.db.commit()
-
-        a1 = Account(tg_user_id="m1-acc", session_path="/tmp/m1.session",
-                     status="active", enabled=True, merchant_id=m1.id)
-        a2 = Account(tg_user_id="m2-acc", session_path="/tmp/m2.session",
-                     status="active", enabled=True, merchant_id=m2.id)
-        a3 = Account(tg_user_id="m3-acc", session_path="/tmp/m3.session",
-                     status="active", enabled=True, merchant_id=m3.id)
-        self.db.add_all([a1, a2, a3])
+        self.db.flush()
+        for tg, mid in [("m1-acc", m1.id), ("m2-acc", m2.id), ("m3-acc", m3.id)]:
+            self.db.add(Account(
+                tg_user_id=tg, session_path=f"/tmp/{tg}.session",
+                status="active", enabled=True, merchant_id=mid,
+            ))
         self.db.commit()
 
         token = self._login("/api/auth/business-login", "ba-1", "pw")
         r = client.get("/api/accounts", headers={"Authorization": f"Bearer {token}"})
         self.assertEqual(r.status_code, 200, r.text)
-        ids = {row["tg_user_id"] for row in r.json()}
-        # Sees its own merchants (m1, m3) but not m2 (owned by ba-2).
-        self.assertEqual(ids, {"m1-acc", "m3-acc"})
+        self.assertEqual(r.json(), [])
 
     def test_admin_sees_all_accounts_including_unscoped(self) -> None:
         ba, other_ba, m1, m2 = _seed_two_merchants(self.db)

@@ -79,30 +79,22 @@ class AccountListHealthHiddenTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         self.db.close()
 
-    def test_merchant_account_list_strips_health_fields(self) -> None:
+    def test_merchant_account_list_is_empty(self) -> None:
+        # Tenant must not see the TG inventory at all — list returns [].
         _seed(self.db)
         token = _login("/api/auth/merchant-login", "m-h1", "pw")
         r = client.get("/api/accounts",
                        headers={"Authorization": f"Bearer {token}"})
         self.assertEqual(r.status_code, 200, r.text)
-        rows = r.json()
-        self.assertTrue(rows, "merchant should still see its own accounts (sanitized)")
-        for row in rows:
-            for field in HEALTH_FIELDS:
-                self.assertNotIn(
-                    field, row,
-                    f"merchant must not see health field '{field}', got {row}",
-                )
+        self.assertEqual(r.json(), [])
 
-    def test_business_agent_account_list_strips_health_fields(self) -> None:
+    def test_business_agent_account_list_is_empty(self) -> None:
         _seed(self.db)
         token = _login("/api/auth/business-login", "ba-h", "pw")
         r = client.get("/api/accounts",
                        headers={"Authorization": f"Bearer {token}"})
         self.assertEqual(r.status_code, 200, r.text)
-        for row in r.json():
-            for field in HEALTH_FIELDS:
-                self.assertNotIn(field, row)
+        self.assertEqual(r.json(), [])
 
     def test_admin_still_sees_health_fields(self) -> None:
         _seed(self.db)
@@ -131,20 +123,18 @@ class DashboardAccountsBreakdownHiddenTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         self.db.close()
 
-    def test_merchant_dashboard_shows_total_and_available_only(self) -> None:
+    def test_merchant_dashboard_hides_accounts_section_entirely(self) -> None:
+        # Tenants (merchant / business_agent) must not see TG inventory
+        # at all — not even an aggregate count. Keeps the support team's
+        # back-of-house operations (back-filling, ratio dead/alive)
+        # invisible to the customer.
         _seed(self.db)
         token = _login("/api/auth/merchant-login", "m-h1", "pw")
         r = client.get("/api/statistics/dashboard",
                        headers={"Authorization": f"Bearer {token}"})
         self.assertEqual(r.status_code, 200, r.text)
-        accs = r.json()["accounts"]
-        # Only 'total' and 'available' should appear; no error/limited/imported
-        # breakdown leaking inventory state.
-        self.assertEqual(set(accs.keys()), {"total", "available"})
-        self.assertEqual(accs["total"], 5)
-        # available = active + imported, disabled excluded. We seeded
-        # 2 active + 1 imported + 1 error + 1 (active but disabled) = 3.
-        self.assertEqual(accs["available"], 3)
+        body = r.json()
+        self.assertNotIn("accounts", body)
 
     def test_admin_dashboard_still_shows_status_breakdown(self) -> None:
         _seed(self.db)
@@ -175,15 +165,13 @@ class PerAccountStatsHealthHiddenTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         self.db.close()
 
-    def test_merchant_per_account_stats_strips_health_fields(self) -> None:
+    def test_merchant_per_account_stats_is_empty(self) -> None:
         _seed(self.db)
         token = _login("/api/auth/merchant-login", "m-h1", "pw")
         r = client.get("/api/statistics/accounts",
                        headers={"Authorization": f"Bearer {token}"})
         self.assertEqual(r.status_code, 200, r.text)
-        for row in r.json():
-            for field in HEALTH_FIELDS:
-                self.assertNotIn(field, row)
+        self.assertEqual(r.json(), [])
 
 
 if __name__ == "__main__":

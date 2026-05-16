@@ -100,13 +100,24 @@
       </el-scrollbar>
 
       <footer class="chat-input">
+        <!-- Tenants (merchant / business_agent) don't see TG inventory
+             so they can't choose an account to send from. Show a
+             read-only hint instead of a broken dropdown. -->
+        <el-alert
+          v-if="!auth.isSupportAgent && !eligibleAccounts.length"
+          type="info"
+          show-icon
+          :closable="false"
+          title="您的账号没有发送权限。如需主动联系客户，请联系平台客服。"
+          style="margin-bottom: 8px;"
+        />
         <div class="input-toolbar">
           <span class="hint">发送账号：</span>
           <el-select v-model="sendAccountId" size="small" filterable placeholder="选择 TG 账号" style="width: 200px;">
             <el-option
               v-for="a in eligibleAccounts"
               :key="a.id"
-              :label="`${a.phone || a.tg_user_id} (${a.status})`"
+              :label="`${a.phone || a.tg_user_id}${a.status ? ' (' + a.status + ')' : ''}`"
               :value="a.id"
             />
           </el-select>

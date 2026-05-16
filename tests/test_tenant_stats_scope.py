@@ -90,13 +90,16 @@ class DashboardScopeTestCase(unittest.TestCase):
         self.db.close()
 
     def test_merchant_dashboard_excludes_other_tenants(self) -> None:
+        # Merchant dashboard scopes customers / messages to own data;
+        # accounts section is no longer returned for tenants at all
+        # (TG inventory is back-office only — operator decision).
         m1, m2 = _seed_two_tenants_with_data(self.db)
         token = _login("/api/auth/merchant-login", "m-s1", "pw")
         r = client.get("/api/statistics/dashboard",
                        headers={"Authorization": f"Bearer {token}"})
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
-        self.assertEqual(body["accounts"]["total"], 1)
+        self.assertNotIn("accounts", body)
         self.assertEqual(body["customers"]["total"], 1)
         # m1 has 1 sent record (a-s1).
         self.assertEqual(body["messages"]["sent"], 1)
@@ -129,14 +132,14 @@ class PerAccountStatsScopeTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         self.db.close()
 
-    def test_merchant_sees_only_own_accounts(self) -> None:
+    def test_merchant_sees_no_per_account_stats(self) -> None:
+        # TG inventory is fully back-office; per-account stats empty.
         m1, m2 = _seed_two_tenants_with_data(self.db)
         token = _login("/api/auth/merchant-login", "m-s1", "pw")
         r = client.get("/api/statistics/accounts",
                        headers={"Authorization": f"Bearer {token}"})
         self.assertEqual(r.status_code, 200, r.text)
-        tg_ids = {row["tg_user_id"] for row in r.json()}
-        self.assertEqual(tg_ids, {"a-s1"})
+        self.assertEqual(r.json(), [])
 
 
 class PerGroupStatsScopeTestCase(unittest.TestCase):

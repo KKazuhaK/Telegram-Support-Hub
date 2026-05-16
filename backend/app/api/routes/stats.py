@@ -84,29 +84,19 @@ def dashboard(db: DbSession, user: CurrentUserDep) -> dict:
         msg_pred = MessageRecord.account_id.in_(acc_id_subq)
         friend_pred = Friend.account_id.in_(acc_id_subq)
 
-    # Tenant actors get the sanitized view: total + a single 'available'
-    # count (active OR imported, AND enabled). The operational breakdown
-    # (limited / error / imported_pending) is support-team-only so the
-    # tenant can't infer when we're back-filling or which TGs are dead.
+    # TG inventory is back-office only — tenants don't get an accounts
+    # section at all (not even total + available). Keeps platform admin
+    # operations (back-filling, dead-account ratio) invisible.
+    payload: dict = {}
     if user.actor_kind == "support_agent":
-        accounts_section = {
+        payload["accounts"] = {
             "total": _scoped_count(db, Account, acc_pred),
             "active": _scoped_count(db, Account, acc_pred, Account.status == "active", Account.enabled.is_(True)),
             "limited": _scoped_count(db, Account, acc_pred, Account.status == "limited"),
             "error": _scoped_count(db, Account, acc_pred, Account.status.in_(["error", "proxy_error"])),
             "imported_pending": _scoped_count(db, Account, acc_pred, Account.status == "imported"),
         }
-    else:
-        accounts_section = {
-            "total": _scoped_count(db, Account, acc_pred),
-            "available": _scoped_count(
-                db, Account, acc_pred,
-                Account.status.in_(["active", "imported"]),
-                Account.enabled.is_(True),
-            ),
-        }
-    return {
-        "accounts": accounts_section,
+    payload.update({
         "account_groups": {
             "total": _scoped_count(
                 db, AccountGroup,
@@ -150,11 +140,15 @@ def dashboard(db: DbSession, user: CurrentUserDep) -> dict:
             "failed": _scoped_count(db, MessageRecord, msg_pred, MessageRecord.status.in_(["failed", "failed_permanent"])),
             "sent_today": _scoped_count(db, MessageRecord, msg_pred, MessageRecord.sent_at.like(f"{today}%")),
         },
-    }
+    })
+    return payload
 
 
 @router.get("/accounts")
 def per_account_stats(db: DbSession, user: CurrentUserDep) -> list[dict]:
+    # TG inventory invisible to tenants — empty list, no count leak.
+    if user.actor_kind != "support_agent":
+        return []
     stmt = select(Account).order_by(Account.id.asc())
     stmt = apply_merchant_scope(stmt, user, db, Account)
     rows = list(db.scalars(stmt))
