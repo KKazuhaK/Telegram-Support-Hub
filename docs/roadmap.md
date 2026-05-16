@@ -114,12 +114,12 @@ Phase 6（产品化）：R12 → R13 → R14
 
 | 项 | 说明 | 何时还 |
 | --- | --- | --- |
-| 前端 chunk 体积 1MB+ | `vite.config.js` 配 `build.rollupOptions.output.manualChunks` 把 Element Plus / ECharts 拆出 | R8 落地时一并做 |
+| ~~前端 chunk 体积 1MB+~~ | ✅ 2026-05-15 拆分：vendor 209k / element-plus 931k / echarts 541k / index 20k；Element Plus 与 ECharts 各自独立 chunk 让浏览器跨发布缓存 | done |
 | Alembic 没有真实增量迁移 | 第一版用 `Base.metadata.create_all`，新加字段后没有 `op.add_column` 脚本。已加 `AUTO_MIGRATE_COLUMNS` 启动时同步缺失列；仍不能处理改类型/删字段 | 等首次需要"非加列"的 schema 变更时引入完整 alembic |
-| WebSocket 没有自动重连 | 前端 `Replies.vue` 简单实现，长连断了不重连 | R10 客服中心时一并加 exponential backoff |
-| Celery `broker_connection_retry` 弃用警告 | 设 `broker_connection_retry_on_startup=True` | 顺手改，<5min |
+| ~~WebSocket 没有自动重连~~ | ✅ 2026-05-15 Replies.vue 加指数回退（1/2/4/8/16/30s）+ 卸载时取消重连定时器 | done |
+| ~~Celery `broker_connection_retry` 弃用警告~~ | ✅ 2026-05-15 设 `broker_connection_retry_on_startup = True` | done |
 | 测试用 SQLite，生产是 MariaDB | 二者 JSON 字段语义略有差异 | R1 改 schema 时加 MariaDB CI matrix |
-| `Customer` 模型实际是"号码 leads" | PRD 中 customer = 商户。后续要么 rename，要么在新 merchants 落地后把现 Customer 改名为 Lead | R1 与 R4 之间 |
+| `Customer` 模型实际是"号码 leads" | PRD 中 customer = 商户。后续要么 rename，要么在新 merchants 落地后把现 Customer 改名为 Lead | 等真正撞到命名冲突时再 rename，避免改名连带审计/历史断链 |
 
 ---
 
@@ -157,3 +157,4 @@ Phase 6（产品化）：R12 → R13 → R14
 - **2026-05-15** — R2 端口配额：`port_quota` 服务（recompute + check）+ accounts/batch 激活前按商户分组校验，超额返回 409 中文提示；ports_total=0 视为无限避免锁老数据（196 测试）。
 - **2026-05-15** — R5.execute slice 4：appeal_mutual（AddContactRequest + add_phone_privacy_exception）+ modify_password（client.edit_2fa SRP 包装）（198 测试）。
 - **2026-05-15** — R3 / R4 前端 actor-aware：登录页加身份选择（客服 / 商务代理 / 商家），auth store 持久化 actorKind+actorId，Layout 菜单按 actor 隐藏不适用项，topbar 角色徽章按 actor 切换。
+- **2026-05-15** — 技术债清理：vite manualChunks 拆 element-plus / echarts / vendor（首屏 index 由 1.1MB 降到 20kB）；Replies.vue WebSocket 指数回退重连；Celery `broker_connection_retry_on_startup=True` 消除弃用警告。

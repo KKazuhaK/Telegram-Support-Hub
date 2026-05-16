@@ -43,6 +43,9 @@ const loading = ref(false)
 const liveEvents = ref([])
 const wsStatus = ref('connecting')
 let ws = null
+let reconnectTimer = null
+let reconnectAttempt = 0
+let stopped = false
 
 async function load() {
   loading.value = true
@@ -52,13 +55,33 @@ async function load() {
   } finally { loading.value = false }
 }
 
+function scheduleReconnect() {
+  if (stopped) return
+  // Exponential backoff capped at 30s — first retry after 1s, then 2/4/8/16/30.
+  const delay = Math.min(1000 * 2 ** reconnectAttempt, 30000)
+  reconnectAttempt += 1
+  wsStatus.value = `reconnect in ${Math.round(delay / 1000)}s`
+  reconnectTimer = setTimeout(connect, delay)
+}
+
 function connect() {
-  if (!auth.token) return
+  if (stopped || !auth.token) return
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
   const url = `${proto}://${window.location.host}/ws/replies?token=${encodeURIComponent(auth.token)}`
-  ws = new WebSocket(url)
-  ws.onopen = () => { wsStatus.value = 'open' }
-  ws.onclose = () => { wsStatus.value = 'closed' }
+  try {
+    ws = new WebSocket(url)
+  } catch (_) {
+    scheduleReconnect()
+    return
+  }
+  ws.onopen = () => {
+    wsStatus.value = 'open'
+    reconnectAttempt = 0
+  }
+  ws.onclose = () => {
+    wsStatus.value = 'closed'
+    scheduleReconnect()
+  }
   ws.onerror = () => { wsStatus.value = 'error' }
   ws.onmessage = (msg) => {
     try {
@@ -72,7 +95,11 @@ function connect() {
 }
 
 onMounted(() => { load(); connect() })
-onBeforeUnmount(() => { try { ws && ws.close() } catch (_) {} })
+onBeforeUnmount(() => {
+  stopped = true
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+  try { ws && ws.close() } catch (_) {}
+})
 </script>
 
 <style scoped>

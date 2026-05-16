@@ -18,6 +18,9 @@ celery_app.conf.task_routes = {
 }
 
 celery_app.conf.timezone = "UTC"
+# Silence Celery 6 deprecation: opt in to retrying broker connections at
+# worker startup so a slow Redis container doesn't fail the boot.
+celery_app.conf.broker_connection_retry_on_startup = True
 
 celery_app.conf.beat_schedule = {
     "proxy-health-check-every-10-minutes": {
