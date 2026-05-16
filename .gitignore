@@ -12,3 +12,8 @@ data/
 .env
 .env.local
 .DS_Store
+
+# Local sqlite scratch files used to generate / verify Alembic revisions
+.alembic_tmp.db
+.alembic_test.db
+.alembic_check.db
