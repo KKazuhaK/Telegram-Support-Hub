@@ -273,12 +273,19 @@ class ImportZipFlatLayoutTestCase(unittest.TestCase):
             "12792412211.session": b"fake-session-bytes",
         })
         self.assertEqual(len(body["imported"]), 1, body)
-        self.assertEqual(body["imported"][0]["user_id"], "12792412211")
+        # Phone-shaped basename is treated as the phone, not the TG user_id.
+        # The real numeric user_id gets filled in later by validate_session.
         with SessionLocal() as db:
-            acc = db.query(Account).filter(Account.tg_user_id == "12792412211").one()
+            acc = db.query(Account).filter(Account.phone == "+12792412211").one()
+            self.assertEqual(acc.tg_user_id, "pending:+12792412211")
             self.assertTrue(acc.session_path.endswith("12792412211.session"))
 
     def test_flat_layout_with_json_sidecar_populates_phone(self) -> None:
+        # When the JSON sidecar's user_id is empty (common for tdesktop-
+        # style exports), the basename is the phone — not a real TG user
+        # id. Account should land with a 'pending:<phone>' placeholder so
+        # downstream code knows the real tg_user_id needs to be resolved
+        # at session-validate time.
         sidecar = (
             b'{"phone": "12792412211", "twofa": "qq1122", '
             b'"api_id": 2040, "user_id": ""}'
@@ -289,8 +296,29 @@ class ImportZipFlatLayoutTestCase(unittest.TestCase):
         })
         self.assertEqual(len(body["imported"]), 1, body)
         with SessionLocal() as db:
-            acc = db.query(Account).filter(Account.tg_user_id == "12792412211").one()
-            self.assertEqual(acc.phone, "+12792412211")
+            acc = db.query(Account).filter(Account.phone == "+12792412211").one()
+            self.assertEqual(acc.tg_user_id, "pending:+12792412211")
+
+    def test_flat_layout_uses_sidecar_user_id_when_present(self) -> None:
+        # When the sidecar carries a real numeric user_id, prefer it over
+        # the phone-derived placeholder.
+        sidecar = b'{"phone": "12792412211", "user_id": "5876543210"}'
+        body = self._upload({
+            "12792412211.session": b"fake-session-bytes",
+            "12792412211.json": sidecar,
+        })
+        self.assertEqual(len(body["imported"]), 1, body)
+        with SessionLocal() as db:
+            acc = db.query(Account).filter(Account.phone == "+12792412211").one()
+            self.assertEqual(acc.tg_user_id, "5876543210")
+
+    def test_flat_layout_without_sidecar_uses_phone_placeholder(self) -> None:
+        # Phone-shaped basename + no sidecar — still phone, still placeholder.
+        body = self._upload({"12792412211.session": b"fake-session-bytes"})
+        self.assertEqual(len(body["imported"]), 1, body)
+        with SessionLocal() as db:
+            acc = db.query(Account).filter(Account.phone == "+12792412211").one()
+            self.assertEqual(acc.tg_user_id, "pending:+12792412211")
 
     def test_subfolder_layout_still_works(self) -> None:
         body = self._upload({
@@ -300,21 +328,111 @@ class ImportZipFlatLayoutTestCase(unittest.TestCase):
         self.assertEqual(body["imported"][0]["user_id"], "1001")
 
     def test_malformed_json_sidecar_is_ignored(self) -> None:
-        # A broken JSON sidecar should not block the session itself
-        # from importing — silently skip the metadata.
+        # A broken JSON sidecar should not block the session itself from
+        # importing — silently skip the metadata. The phone is still
+        # derivable from the basename (which is itself phone-shaped),
+        # so the account still ends up with the right phone + placeholder.
         body = self._upload({
             "12792412211.session": b"fake-session-bytes",
             "12792412211.json": b"{this is not valid json",
         })
         self.assertEqual(len(body["imported"]), 1, body)
         with SessionLocal() as db:
-            acc = db.query(Account).filter(Account.tg_user_id == "12792412211").one()
-            self.assertIsNone(acc.phone)
+            acc = db.query(Account).filter(
+                Account.tg_user_id == "pending:+12792412211"
+            ).one()
+            self.assertEqual(acc.phone, "+12792412211")
 
     def test_orphan_json_without_session_is_skipped(self) -> None:
         # JSON sidecar with no matching .session should not create an account.
         body = self._upload({"12792412211.json": b'{"phone": "12792412211"}'})
         self.assertEqual(body["imported"], [])
+
+
+class ValidateSessionPromotesPendingIdTestCase(unittest.TestCase):
+    """When validate_session succeeds on an account whose tg_user_id is
+    still a `pending:<phone>` placeholder, the worker should overwrite
+    it with the real numeric id returned by Telethon. Otherwise the
+    placeholder would live forever and downstream features that join on
+    tg_user_id (Friend, MessageRecord) wouldn't see the real account."""
+
+    def setUp(self) -> None:
+        with SessionLocal() as db:
+            for model in (AccountGroupMember, Account, AccountGroup):
+                for row in db.query(model).all():
+                    db.delete(row)
+            db.commit()
+
+    def test_pending_placeholder_replaced_with_real_id(self) -> None:
+        from unittest.mock import patch
+        from backend.app.telegram.adapter import TelegramValidateResult
+        from backend.app.workers import account_tasks
+
+        with SessionLocal() as db:
+            acc = Account(
+                tg_user_id="pending:+12792412211",
+                phone="+12792412211",
+                session_path="/tmp/fake.session",
+                status="imported",
+                enabled=True,
+            )
+            db.add(acc)
+            db.commit()
+            acc_id = acc.id
+
+        async def fake_validate(account, proxy):
+            return TelegramValidateResult(
+                ok=True, tg_user_id="5876543210", phone="12792412211",
+            )
+
+        # Stub adapter and force it to look configured.
+        adapter_stub = type("Stub", (), {
+            "configured": True,
+            "validate_session": staticmethod(fake_validate),
+        })()
+        with patch.object(account_tasks, "get_adapter", return_value=adapter_stub):
+            result = account_tasks.validate_all_sessions()
+
+        self.assertEqual(result["validated"], 1)
+        with SessionLocal() as db:
+            updated = db.get(Account, acc_id)
+            self.assertEqual(updated.tg_user_id, "5876543210")
+            self.assertEqual(updated.status, "active")
+
+    def test_real_id_not_overwritten(self) -> None:
+        # If tg_user_id already looks like a real id (no `pending:` prefix),
+        # validate_session must not overwrite it even if Telethon returns
+        # a different value — operator data wins.
+        from unittest.mock import patch
+        from backend.app.telegram.adapter import TelegramValidateResult
+        from backend.app.workers import account_tasks
+
+        with SessionLocal() as db:
+            acc = Account(
+                tg_user_id="111111",  # operator-set, real-looking
+                phone="+12792412211",
+                session_path="/tmp/fake.session",
+                status="imported",
+                enabled=True,
+            )
+            db.add(acc)
+            db.commit()
+            acc_id = acc.id
+
+        async def fake_validate(account, proxy):
+            return TelegramValidateResult(
+                ok=True, tg_user_id="999999", phone="12792412211",
+            )
+
+        adapter_stub = type("Stub", (), {
+            "configured": True,
+            "validate_session": staticmethod(fake_validate),
+        })()
+        with patch.object(account_tasks, "get_adapter", return_value=adapter_stub):
+            account_tasks.validate_all_sessions()
+
+        with SessionLocal() as db:
+            self.assertEqual(db.get(Account, acc_id).tg_user_id, "111111")
 
 
 if __name__ == "__main__":

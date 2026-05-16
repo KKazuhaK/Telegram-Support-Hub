@@ -65,6 +65,16 @@ def validate_all_sessions() -> dict:
                 account.status = "active"
                 account.last_login_at = _now_iso()
                 account.last_error = None
+                # Promote `pending:<phone>` placeholder (created at zip
+                # import time when only the phone was known) to the real
+                # numeric tg_user_id Telethon just reported. Don't touch
+                # tg_user_id when the operator set a real-looking value.
+                if (
+                    result.tg_user_id
+                    and account.tg_user_id
+                    and account.tg_user_id.startswith("pending:")
+                ):
+                    account.tg_user_id = result.tg_user_id
                 validated += 1
             else:
                 account.status = "error"

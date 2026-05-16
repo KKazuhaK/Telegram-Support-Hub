@@ -65,24 +65,69 @@ def safe_part(value: str) -> str:
     return part[:100] or "unknown"
 
 
-def _user_id_from_zip_entry(filename: str) -> str | None:
-    """Map a zip entry path to a tg_user_id, accepting two layouts:
+# Anything looking like 7-15 digits (optionally with leading +) is almost
+# certainly a phone number, NOT a Telegram user id (real user ids are
+# also numeric but operators using subfolder layout pick short non-phone
+# names like '1001'). 7 is the minimum E.164 national number length.
+_PHONE_BASENAME_RE = re.compile(r"^\+?\d{7,15}$")
 
-    A. `<user_id>/<anything>.session`  (subfolder convention)
-    B. `<user_id>.session`             (flat layout, e.g. tdesktop exports)
 
-    Returns None when the path doesn't match either shape.
+def _stem_from_zip_entry(filename: str) -> tuple[str | None, bool]:
+    """Resolve a zip entry path to (basename_stem, is_subfolder).
+
+    A. `<id>/<anything>.session`  -> (id, True)   (subfolder convention)
+    B. `<id>.session`             -> (id, False)  (flat layout)
+
+    Returns (None, False) for paths that match neither shape.
     """
     parts = [p for p in Path(filename.replace("\\", "/")).parts if p not in {"/", "."}]
     if not parts:
-        return None
+        return None, False
     if len(parts) >= 2:
-        return safe_part(parts[0])
-    # Flat: '<user_id>.session' — strip the .session suffix from basename.
+        return safe_part(parts[0]), True
     base = parts[0]
     if base.lower().endswith(".session"):
-        return safe_part(base[: -len(".session")])
-    return None
+        return safe_part(base[: -len(".session")]), False
+    return None, False
+
+
+def _resolve_account_identity(stem: str, is_subfolder: bool, meta: dict) -> tuple[str, str | None]:
+    """Decide the (tg_user_id, phone) to persist for a freshly-imported
+    session, given the basename stem and the optional sidecar metadata.
+
+    Rules:
+      1. Sidecar carries a non-empty `user_id` -> use it verbatim;
+         phone comes from sidecar `phone` (or stem if phone-shaped).
+      2. Sidecar carries a non-empty `phone` (no real user_id) -> the
+         basename is the phone; tg_user_id is a `pending:<phone>`
+         placeholder that validate_session will overwrite once Telethon
+         returns the real numeric id.
+      3. Flat layout, phone-shaped basename, no useful sidecar -> same
+         placeholder, phone derived from the basename.
+      4. Otherwise (subfolder layout with a hand-picked id, or any flat
+         entry whose basename doesn't look phone-shaped) -> trust the
+         stem as the tg_user_id; phone left to whatever sidecar said
+         (commonly None).
+    """
+    sidecar_user_id = str(meta.get("user_id") or "").strip()
+    sidecar_phone = _normalize_phone(meta.get("phone"))
+
+    if sidecar_user_id:
+        # Rule 1.
+        phone = sidecar_phone or (
+            _normalize_phone(stem) if _PHONE_BASENAME_RE.match(stem) else None
+        )
+        return sidecar_user_id, phone
+
+    # Rule 2 + 3 (phone-derived placeholder).
+    phone = sidecar_phone
+    if phone is None and not is_subfolder and _PHONE_BASENAME_RE.match(stem):
+        phone = _normalize_phone(stem)
+    if phone:
+        return f"pending:{phone}", phone
+
+    # Rule 4.
+    return stem, sidecar_phone
 
 
 def _normalize_phone(raw: str | None) -> str | None:
@@ -227,24 +272,35 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
     for info in zf.infolist():
         if info.is_dir() or not info.filename.lower().endswith(".session"):
             continue
-        user_id = _user_id_from_zip_entry(info.filename)
-        if user_id is None:
+        stem, is_subfolder = _stem_from_zip_entry(info.filename)
+        if stem is None:
             skipped.append({"file": info.filename, "reason": "path must be <user_id>.session or <user_id>/*.session"})
             continue
+        meta = sidecars.get(stem) or {}
+        tg_user_id, phone = _resolve_account_identity(stem, is_subfolder, meta)
+
         filename = safe_part(Path(info.filename.replace("\\", "/")).name)
-        account_dir = settings.session_dir / user_id
+        # Group session files under the stem (phone or operator id), not
+        # the resolved tg_user_id — the directory is for disk layout, not
+        # identity, so re-importing the same phone keeps the same folder
+        # even after validate_session promotes tg_user_id to a real id.
+        account_dir = settings.session_dir / stem
         account_dir.mkdir(parents=True, exist_ok=True)
         session_path = account_dir / filename
         session_path.write_bytes(zf.read(info))
 
-        meta = sidecars.get(user_id) or {}
-        phone_from_meta = _normalize_phone(meta.get("phone"))
+        # Dedup by (a) real id if we have one, (b) the placeholder otherwise.
+        account = db.scalar(select(Account).where(Account.tg_user_id == tg_user_id))
+        if not account and phone:
+            # Same phone may have been imported earlier under a different
+            # tg_user_id (e.g. operator typed a manual id first, then a
+            # later sidecar arrived). Match by phone too.
+            account = db.scalar(select(Account).where(Account.phone == phone))
 
-        account = db.scalar(select(Account).where(Account.tg_user_id == user_id))
         if not account:
             account = Account(
-                tg_user_id=user_id, session_path=str(session_path),
-                status="imported", phone=phone_from_meta,
+                tg_user_id=tg_user_id, session_path=str(session_path),
+                status="imported", phone=phone,
             )
             db.add(account)
             db.flush()
@@ -253,11 +309,9 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
             account.session_path = str(session_path)
             if account.status == "error":
                 account.status = "imported"
-            # Only populate phone on existing rows when it's currently empty,
-            # to avoid silently overwriting an operator's manual edit.
-            if phone_from_meta and not account.phone:
-                account.phone = phone_from_meta
-        imported.append({"user_id": user_id, "file": info.filename})
+            if phone and not account.phone:
+                account.phone = phone
+        imported.append({"user_id": tg_user_id, "file": info.filename})
 
     write_audit(db, actor=admin, action="account.import_zip",
                 detail={"imported": len(imported), "skipped": len(skipped)})
