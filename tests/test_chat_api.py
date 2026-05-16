@@ -186,6 +186,82 @@ class CustomerChatTestCase(unittest.TestCase):
         )
         self.assertEqual(r.status_code, 400, r.text)
 
+    def test_post_message_with_auto_translate_stores_both(self) -> None:
+        # auto_translate=true: server translates draft into customer's
+        # last_source_lang, stores translated as body_snapshot and the
+        # original Chinese as translation. Both visible in the UI.
+        with SessionLocal() as db:
+            cust = db.get(Customer, self.customer_id)
+            cust.last_source_lang = "en"
+            db.commit()
+
+        from backend.app.telegram import adapter as adapter_module
+        from backend.app.services import translator
+
+        with patch.object(adapter_module, "get_adapter") as get_adapter_mock, \
+             patch.object(translator, "_google_translate",
+                          return_value=("Hello Alice", "zh-CN")):
+            stub = type("Stub", (), {
+                "configured": True,
+                "send_message": self._stubbed_send(),
+            })()
+            get_adapter_mock.return_value = stub
+
+            r = client.post(
+                f"/api/customers/{self.customer_id}/messages",
+                json={
+                    "account_id": self.account_id,
+                    "text": "你好 Alice",
+                    "auto_translate": True,
+                },
+                headers=self.auth,
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        # body_snapshot is what was actually sent (English).
+        self.assertEqual(body["body_snapshot"], "Hello Alice")
+        # translation keeps the operator's original Chinese for reference.
+        self.assertEqual(body["translation"], "你好 Alice")
+
+    def test_translate_cache_endpoint_persists_translation_on_inbound(self) -> None:
+        # Existing inbound row without translation — POST the cache
+        # endpoint to translate + store + return it. Second call returns
+        # the cached value without hitting the provider again.
+        with SessionLocal() as db:
+            rec = MessageRecord(
+                account_id=self.account_id,
+                customer_id=self.customer_id,
+                phone="+19990001111",
+                body_snapshot="Hello there",
+                direction="inbound",
+                status="received",
+            )
+            db.add(rec)
+            db.commit()
+            msg_id = rec.id
+
+        from backend.app.services import translator
+        with patch.object(translator, "_google_translate",
+                          return_value=("你好", "en")) as mock_call:
+            r = client.post(
+                f"/api/customers/{self.customer_id}/messages/{msg_id}/translate",
+                headers=self.auth,
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["translation"], "你好")
+        with SessionLocal() as db:
+            self.assertEqual(db.get(MessageRecord, msg_id).translation, "你好")
+
+        # Second call: cached, no provider hit.
+        with patch.object(translator, "_google_translate",
+                          side_effect=AssertionError("should be cached")):
+            r2 = client.post(
+                f"/api/customers/{self.customer_id}/messages/{msg_id}/translate",
+                headers=self.auth,
+            )
+        self.assertEqual(r2.status_code, 200, r2.text)
+        self.assertEqual(r2.json()["translation"], "你好")
+
     def test_post_message_rejects_account_in_wrong_tenant(self) -> None:
         # An account belonging to another merchant must not be usable.
         ba = BusinessAgent(name="ba-x", password_hash=hash_password("p"), status=True)

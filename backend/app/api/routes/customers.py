@@ -214,6 +214,11 @@ def list_friends(
 class ChatSendPayload(BaseModel):
     account_id: int
     text: str = Field(min_length=1, max_length=4000)
+    # When True, server translates `text` into the customer's last
+    # detected language and sends THAT to Telegram, storing the original
+    # Chinese alongside in MessageRecord.translation so the operator
+    # can see both in their bubble.
+    auto_translate: bool = False
 
 
 @router.get("/{customer_id}/messages")
@@ -262,6 +267,22 @@ def send_customer_message(
     if account.status != "active" or not account.enabled:
         raise HTTPException(status_code=400, detail="TG 账号未启用或不在线")
 
+    # auto_translate: send the customer-language version to Telegram,
+    # keep the operator's original Chinese on the record for display.
+    original_chinese: str | None = None
+    if payload.auto_translate:
+        from backend.app.services import translator
+        target = cust.last_source_lang or "en"
+        try:
+            translated_text, _src = translator._google_translate(text, target)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"发送前翻译失败：{exc}（已取消发送）",
+            ) from exc
+        original_chinese = text
+        text = translated_text
+
     # Persist the outbound row first (status=sending) so we have an id
     # to update with the send result. This also gives the operator an
     # audit trail when Telethon raises before returning.
@@ -271,6 +292,7 @@ def send_customer_message(
         customer_id=customer_id,
         phone=cust.phone,
         body_snapshot=text,
+        translation=original_chinese,
         direction="outbound",
         status="sending",
     )
@@ -315,6 +337,45 @@ def send_customer_message(
             detail=f"Telegram 发送失败：{result.error_message or result.error_code}",
         )
     return to_dict(record)
+
+
+@router.post("/{customer_id}/messages/{msg_id}/translate")
+def cache_message_translation(
+    customer_id: int, msg_id: int,
+    db: DbSession, user: CurrentUserDep,
+) -> dict:
+    """Lazily translate a single message and cache the result on the
+    row. Used by the chat UI to auto-translate inbound bubbles on
+    open — subsequent loads hit the cache, not the provider.
+
+    Returns {translation, source_lang}. Cached translations short-
+    circuit so the provider isn't re-hit.
+    """
+    cust = db.get(Customer, customer_id)
+    if not cust or not can_access_row(user, db, cust):
+        raise HTTPException(status_code=404, detail="客户不存在")
+    rec = db.get(MessageRecord, msg_id)
+    if not rec or rec.customer_id != customer_id:
+        raise HTTPException(status_code=404, detail="消息不存在")
+
+    if rec.translation:
+        return {"translation": rec.translation, "source_lang": cust.last_source_lang}
+
+    from backend.app.services import translator
+    try:
+        translated, source = translator._google_translate(
+            rec.body_snapshot or "", translator.DEFAULT_TARGET,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=f"翻译失败：{exc}") from exc
+
+    rec.translation = translated
+    # Side-effect: cache customer source lang so outbound auto-translate
+    # works on the next send without an extra detect round-trip.
+    if source and rec.direction == "inbound" and cust.last_source_lang != source:
+        cust.last_source_lang = source
+    db.commit()
+    return {"translation": translated, "source_lang": source}
 
 
 @router.post("/friends/sync")

@@ -63,32 +63,37 @@
           :class="m.direction === 'outbound' ? 'out' : 'in'"
         >
           <div class="bubble">
+            <!-- Original (whatever was actually sent / received). For
+                 outbound auto-translated messages this is the foreign-
+                 language text the customer sees. -->
             <div class="text">{{ m.body_snapshot }}</div>
-            <!-- Translated text appears below the original (only fetched
-                 when operator clicks 翻译; cached in m._translated). -->
-            <div v-if="m._translated" class="translated">
-              <span class="tag">译</span> {{ m._translated }}
+            <!-- Translation (cached on the row, populated by either the
+                 auto-translate-on-receive flow or the send-side
+                 auto-translate that stored the original Chinese). Hidden
+                 when m._collapsed is true. -->
+            <div v-if="m.translation && !m._collapsed" class="translated">
+              {{ m.translation }}
             </div>
             <div class="bubble-meta">
               <span>{{ formatTs(m.created_at) }}</span>
               <span v-if="m.direction === 'outbound'" class="status">
                 {{ statusLabel(m.status) }}
               </span>
-              <!-- Only offer translation on inbound foreign-language
-                   replies (no point translating our own Chinese). -->
+              <!-- Toggle collapse if we have a translation, else offer
+                   to fetch one (only meaningful on inbound). -->
               <el-button
-                v-if="m.direction === 'inbound' && !m._translated"
+                v-if="m.translation"
+                size="small"
+                link
+                @click="m._collapsed = !m._collapsed"
+              >{{ m._collapsed ? '展开译文' : '收起译文' }}</el-button>
+              <el-button
+                v-else-if="m.direction === 'inbound'"
                 size="small"
                 link
                 :loading="m._translating"
                 @click="translateMessage(m)"
               >翻译</el-button>
-              <el-button
-                v-if="m._translated"
-                size="small"
-                link
-                @click="m._translated = ''"
-              >隐藏译文</el-button>
             </div>
           </div>
         </div>
@@ -112,6 +117,9 @@
           <el-button size="small" link @click="openTranslatePanel">
             <el-icon><ChatRound /></el-icon>&nbsp;翻译面板
           </el-button>
+          <el-checkbox v-model="autoTranslateInbound" size="small">
+            自动翻译来信
+          </el-checkbox>
           <el-checkbox v-model="autoTranslateOnSend" size="small" class="auto-tr-toggle">
             发送前翻译成客户语言
             <span v-if="customerLang" class="lang-hint">（{{ customerLang }}）</span>
@@ -229,8 +237,11 @@ const trSrc = ref('')
 const trDst = ref('')
 const trBusy = ref(false)
 
-// Outbound auto-translate.
+// Outbound auto-translate (send draft → translate → store both).
 const autoTranslateOnSend = ref(false)
+// Inbound auto-translate (when opening a chat, translate every inbound
+// message and cache; default ON because the screenshot UX is bilingual).
+const autoTranslateInbound = ref(true)
 
 const filteredCustomers = computed(() => {
   const q = search.value.trim().toLowerCase()
@@ -319,13 +330,18 @@ async function loadHistory(customerId) {
   historyLoading.value = true
   try {
     const { data } = await http.get(`/customers/${customerId}/messages`)
-    // Pre-init translation fields so Vue's Proxy tracks them once we
-    // set them later from translateMessage().
+    // Pre-init UI-only fields so Vue's Proxy tracks them once we set
+    // them later (_translating, _collapsed). translation comes from the
+    // server (cached or null).
     history.value = (data || []).map((m) => ({
-      ...m, _translated: '', _translating: false,
+      ...m, _translating: false, _collapsed: false,
     }))
     await nextTick()
     scrollToBottom()
+    // Fire off lazy auto-translate for any inbound row that hasn't
+    // been cached yet. Sequential by design — don't hammer the
+    // provider with a long history opening.
+    autoTranslatePendingInbound()
   } finally {
     historyLoading.value = false
   }
@@ -403,42 +419,52 @@ async function runStandaloneTranslate() {
 }
 
 async function translateMessage(m) {
-  if (m._translating || m._translated) return
+  if (m._translating || m.translation) return
   m._translating = true
   try {
-    const { data } = await http.post('/translate', { text: m.body_snapshot })
-    // Reactive assignment — Vue 3 picks up new properties on plain objects
-    // pulled from the API as long as the parent ref is reactive.
-    m._translated = data.translated_text
+    // Per-message cache endpoint: server translates + persists to the
+    // row's translation column so subsequent loads hit the DB cache.
+    const { data } = await http.post(
+      `/customers/${selected.value.id}/messages/${m.id}/translate`,
+    )
+    m.translation = data.translation
+    m._collapsed = false
   } catch (_) { /* http.js toasted already */
   } finally {
     m._translating = false
   }
 }
 
+// Walk the loaded history and lazily translate any inbound message
+// that doesn't already have a cached translation. Fire-and-forget per
+// message; failures stay silent (operator can manually retry via the
+// "翻译" button if needed).
+async function autoTranslatePendingInbound() {
+  if (!selected.value || !autoTranslateInbound.value) return
+  const pending = history.value.filter(
+    (m) => m.direction === 'inbound' && !m.translation,
+  )
+  // Limit concurrency to avoid blasting the provider on a long history.
+  for (const m of pending) {
+    await translateMessage(m)
+  }
+}
+
 async function send() {
-  let text = draft.value.trim()
+  const text = draft.value.trim()
   if (!text || !selected.value || !sendAccountId.value) return
   sending.value = true
   try {
-    if (autoTranslateOnSend.value) {
-      // Translate the draft into the customer's last detected language.
-      // If we don't know yet, the backend falls back to 'en'.
-      try {
-        const { data: tr } = await http.post('/translate', {
-          text, target: 'auto', customer_id: selected.value.id,
-        })
-        if (tr?.translated_text) text = tr.translated_text
-      } catch (_) {
-        // Translation failed; warn and abort send so the operator
-        // doesn't accidentally ship the un-translated Chinese.
-        ElMessage.warning('翻译失败，已取消发送（请取消勾选或稍后重试）')
-        return
-      }
-    }
+    // Server handles translation when auto_translate=true: it sends the
+    // foreign-language version to TG and stores the original Chinese
+    // on the row so the bubble can render both.
     const { data } = await http.post(
       `/customers/${selected.value.id}/messages`,
-      { account_id: sendAccountId.value, text },
+      {
+        account_id: sendAccountId.value,
+        text,
+        auto_translate: autoTranslateOnSend.value,
+      },
     )
     history.value.push(data)
     draft.value = ''
@@ -610,25 +636,19 @@ onBeforeUnmount(() => { stopped = true; tearDownWs() })
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
 }
 .bubble-row.out .bubble { background: #9eea6a; color: #1a1a1a; }
-.bubble .text { white-space: pre-wrap; word-break: break-word; }
+.bubble .text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: inherit;
+}
 .bubble .translated {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px dashed rgba(0, 0, 0, 0.15);
+  margin-top: 4px;
   font-size: 13px;
-  color: #555;
+  color: rgba(0, 0, 0, 0.55);
   white-space: pre-wrap;
   word-break: break-word;
 }
-.bubble .translated .tag {
-  display: inline-block;
-  background: var(--el-color-primary-light-7);
-  color: var(--el-color-primary);
-  border-radius: 3px;
-  padding: 0 4px;
-  margin-right: 4px;
-  font-size: 11px;
-}
+.bubble-row.out .bubble .translated { color: rgba(0, 0, 0, 0.5); }
 .bubble-meta {
   margin-top: 4px;
   font-size: 11px;

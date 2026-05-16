@@ -19,6 +19,13 @@ class MessageRecord(Base, TimestampMixin):
     # 'outbound' = sent by an operator/campaign; 'inbound' = received from
     # the customer/friend (recorded by listen_worker for chat-history use).
     direction: Mapped[str] = mapped_column(String(16), default="outbound", index=True)
+    # Companion text in the other language:
+    #   inbound row  -> Chinese translation of body_snapshot (cached
+    #                   the first time the chat UI sees the message)
+    #   outbound row -> original Chinese the operator typed, when the
+    #                   message was sent with auto_translate=True
+    # NULL when no translation has been performed.
+    translation: Mapped[str | None] = mapped_column(Text)
     sent_at: Mapped[str | None] = mapped_column(String(64))
     read_at: Mapped[str | None] = mapped_column(String(64))
     replied_at: Mapped[str | None] = mapped_column(String(64))
