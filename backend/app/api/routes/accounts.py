@@ -297,10 +297,19 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
     # ---- 1) Telegram Desktop tdata layout ----
     # Each <phone>/tdata/* folder is converted to a single .session file
     # via opentele, then handled like the flat layout below.
+    # convert_tdata_zip_entry internally calls asyncio.run() to drive
+    # opentele's async API. Since this route handler is itself async
+    # (running on FastAPI's event loop), asyncio.run from within would
+    # raise "cannot be called from a running event loop". Offload to the
+    # default threadpool — a fresh thread has no running loop so
+    # asyncio.run is legal there, and the request loop stays free.
+    import asyncio as _asyncio
     tdata_stems = is_tdata_layout(zf)
     for stem in tdata_stems:
         try:
-            session_bytes = convert_tdata_zip_entry(zf, stem)
+            session_bytes = await _asyncio.to_thread(
+                convert_tdata_zip_entry, zf, stem,
+            )
         except Exception as exc:  # noqa: BLE001 — surface to operator
             skipped.append({
                 "file": f"{stem}/tdata",
