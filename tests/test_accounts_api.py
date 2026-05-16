@@ -349,6 +349,130 @@ class ImportZipFlatLayoutTestCase(unittest.TestCase):
         self.assertEqual(body["imported"], [])
 
 
+class ImportZipTdataLayoutTestCase(unittest.TestCase):
+    """tdata zips (Telegram Desktop session export):
+
+        <phone>/2Fa.txt
+        <phone>/tdata/key_datas
+        <phone>/tdata/D877F783D5D3EF8C/maps
+        <phone>/tdata/D877F783D5D3EF8Cs
+
+    Detection looks for any '<stem>/tdata/key_datas' entry. The actual
+    binary conversion goes through opentele in production; tests mock
+    convert_tdata_zip_entry to return synthetic session bytes so the
+    suite doesn't need the C extension installed.
+    """
+
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+        with SessionLocal() as db:
+            for model in (
+                AccountProxyLog, AccountGroupMember, Account, AccountGroup,
+                SupportAgentGroupPermission, SupportAgent,
+            ):
+                for row in db.query(model).all():
+                    db.delete(row)
+            db.commit()
+        bootstrap = self.client.post(
+            "/api/auth/bootstrap-admin",
+            json={"username": "root", "password": "12345678"},
+        )
+        self.auth = {"Authorization": f"Bearer {bootstrap.json()['access_token']}"}
+
+    def _make_tdata_zip(self, *phones: str, with_2fa: bool = True) -> bytes:
+        entries: dict[str, bytes] = {}
+        for phone in phones:
+            if with_2fa:
+                entries[f"{phone}/2Fa.txt"] = b"qq1122"
+            entries[f"{phone}/tdata/key_datas"] = b"\x00" * 388
+            entries[f"{phone}/tdata/D877F783D5D3EF8C/maps"] = b"\x00" * 68
+            entries[f"{phone}/tdata/D877F783D5D3EF8Cs"] = b"\x00" * 348
+        return _make_zip(entries)
+
+    def test_tdata_zip_is_detected_and_converted(self) -> None:
+        from unittest.mock import patch
+        from backend.app.api.routes import accounts as accounts_route
+
+        # Fake converter returns deterministic per-phone bytes so we can
+        # verify _persist_session wrote the right file.
+        def fake_convert(zf, stem):
+            return f"FAKE-SESSION-{stem}".encode()
+
+        with patch.object(accounts_route, "convert_tdata_zip_entry",
+                          side_effect=fake_convert):
+            zip_bytes = self._make_tdata_zip("256753693406", "26775232571")
+            r = self.client.post(
+                "/api/accounts/import-zip",
+                files={"sessions": ("td.zip", zip_bytes, "application/zip")},
+                headers=self.auth,
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(len(body["imported"]), 2, body)
+
+        with SessionLocal() as db:
+            phones = {a.phone for a in db.query(Account).all()}
+            # 12-digit basenames look phone-shaped → recognized as phones.
+            self.assertEqual(phones, {"+256753693406", "+26775232571"})
+            # tg_user_id is the pending placeholder until validate_session.
+            for acc in db.query(Account).all():
+                self.assertTrue(acc.tg_user_id.startswith("pending:+"))
+
+    def test_tdata_conversion_failure_skips_that_phone(self) -> None:
+        from unittest.mock import patch
+        from backend.app.api.routes import accounts as accounts_route
+
+        # First phone fails, second succeeds — partial import still
+        # completes; failed phone goes to `skipped`.
+        def flaky_convert(zf, stem):
+            if stem == "256753693406":
+                raise RuntimeError("bad tdata magic")
+            return b"OK"
+
+        with patch.object(accounts_route, "convert_tdata_zip_entry",
+                          side_effect=flaky_convert):
+            zip_bytes = self._make_tdata_zip("256753693406", "26775232571")
+            r = self.client.post(
+                "/api/accounts/import-zip",
+                files={"sessions": ("td.zip", zip_bytes, "application/zip")},
+                headers=self.auth,
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(len(body["imported"]), 1)
+        self.assertEqual(len(body["skipped"]), 1)
+        self.assertIn("bad tdata magic", body["skipped"][0]["reason"])
+
+    def test_mixed_zip_with_tdata_and_flat_session_both_import(self) -> None:
+        # Some operators have mixed zips. Both paths should fire and
+        # no entry should be processed twice.
+        from unittest.mock import patch
+        from backend.app.api.routes import accounts as accounts_route
+
+        with patch.object(accounts_route, "convert_tdata_zip_entry",
+                          return_value=b"FAKE-TDATA"):
+            entries = {
+                # tdata-style for one phone
+                "111111111111/2Fa.txt": b"x",
+                "111111111111/tdata/key_datas": b"\x00",
+                "111111111111/tdata/D877F783D5D3EF8C/maps": b"\x00",
+                "111111111111/tdata/D877F783D5D3EF8Cs": b"\x00",
+                # flat-layout .session for another
+                "222222222222.session": b"flat-bytes",
+            }
+            r = self.client.post(
+                "/api/accounts/import-zip",
+                files={"sessions": ("mixed.zip", _make_zip(entries), "application/zip")},
+                headers=self.auth,
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(len(body["imported"]), 2, body)
+        with SessionLocal() as db:
+            phones = {a.phone for a in db.query(Account).all()}
+            self.assertEqual(phones, {"+111111111111", "+222222222222"})
+
+
 class ValidateSessionPromotesPendingIdTestCase(unittest.TestCase):
     """When validate_session succeeds on an account whose tg_user_id is
     still a `pending:<phone>` placeholder, the worker should overwrite

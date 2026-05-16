@@ -21,6 +21,7 @@ from backend.app.services.port_quota import (
 )
 from backend.app.services.proxy_pool import PoolError, auto_assign_proxy
 from backend.app.services.serializers import list_dict, to_dict
+from backend.app.services.tdata_converter import convert_tdata_zip_entry, is_tdata_layout
 from backend.app.services.tenant_scope import apply_merchant_scope, sanitize_account_for_tenant
 
 router = APIRouter()
@@ -260,6 +261,60 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="ZIP 文件损坏或格式不正确") from exc
 
+    def _persist_session(stem: str, is_subfolder: bool, meta: dict,
+                         filename: str, session_bytes: bytes,
+                         source_label: str) -> None:
+        """Common path: write session bytes under session_dir, upsert
+        Account + AccountGroupMember, append to `imported` log."""
+        tg_user_id, phone = _resolve_account_identity(stem, is_subfolder, meta)
+        safe_filename = safe_part(filename)
+        account_dir = settings.session_dir / stem
+        account_dir.mkdir(parents=True, exist_ok=True)
+        session_path = account_dir / safe_filename
+        session_path.write_bytes(session_bytes)
+
+        account = db.scalar(select(Account).where(Account.tg_user_id == tg_user_id))
+        if not account and phone:
+            account = db.scalar(select(Account).where(Account.phone == phone))
+        if not account:
+            account = Account(
+                tg_user_id=tg_user_id, session_path=str(session_path),
+                status="imported", phone=phone,
+            )
+            db.add(account)
+            db.flush()
+            db.add(AccountGroupMember(
+                account_id=account.id, group_id=default_group.id, is_primary=True,
+            ))
+        else:
+            account.session_path = str(session_path)
+            if account.status == "error":
+                account.status = "imported"
+            if phone and not account.phone:
+                account.phone = phone
+        imported.append({"user_id": tg_user_id, "file": source_label})
+
+    # ---- 1) Telegram Desktop tdata layout ----
+    # Each <phone>/tdata/* folder is converted to a single .session file
+    # via opentele, then handled like the flat layout below.
+    tdata_stems = is_tdata_layout(zf)
+    for stem in tdata_stems:
+        try:
+            session_bytes = convert_tdata_zip_entry(zf, stem)
+        except Exception as exc:  # noqa: BLE001 — surface to operator
+            skipped.append({
+                "file": f"{stem}/tdata",
+                "reason": f"tdata 转换失败：{exc}",
+            })
+            continue
+        _persist_session(
+            stem=stem, is_subfolder=False, meta={},
+            filename=f"{stem}.session",
+            session_bytes=session_bytes,
+            source_label=f"{stem}/tdata",
+        )
+
+    # ---- 2) Plain .session layouts (flat <stem>.session OR subfolder) ----
     # Pre-index optional sidecar JSON files by their basename stem so a
     # `<user_id>.session` entry can pick up its `<user_id>.json` metadata
     # in one pass. Subfolder layouts don't have sidecars; legacy callers
@@ -284,42 +339,17 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
         if stem is None:
             skipped.append({"file": info.filename, "reason": "path must be <user_id>.session or <user_id>/*.session"})
             continue
-        meta = sidecars.get(stem) or {}
-        tg_user_id, phone = _resolve_account_identity(stem, is_subfolder, meta)
-
-        filename = safe_part(Path(info.filename.replace("\\", "/")).name)
-        # Group session files under the stem (phone or operator id), not
-        # the resolved tg_user_id — the directory is for disk layout, not
-        # identity, so re-importing the same phone keeps the same folder
-        # even after validate_session promotes tg_user_id to a real id.
-        account_dir = settings.session_dir / stem
-        account_dir.mkdir(parents=True, exist_ok=True)
-        session_path = account_dir / filename
-        session_path.write_bytes(zf.read(info))
-
-        # Dedup by (a) real id if we have one, (b) the placeholder otherwise.
-        account = db.scalar(select(Account).where(Account.tg_user_id == tg_user_id))
-        if not account and phone:
-            # Same phone may have been imported earlier under a different
-            # tg_user_id (e.g. operator typed a manual id first, then a
-            # later sidecar arrived). Match by phone too.
-            account = db.scalar(select(Account).where(Account.phone == phone))
-
-        if not account:
-            account = Account(
-                tg_user_id=tg_user_id, session_path=str(session_path),
-                status="imported", phone=phone,
-            )
-            db.add(account)
-            db.flush()
-            db.add(AccountGroupMember(account_id=account.id, group_id=default_group.id, is_primary=True))
-        else:
-            account.session_path = str(session_path)
-            if account.status == "error":
-                account.status = "imported"
-            if phone and not account.phone:
-                account.phone = phone
-        imported.append({"user_id": tg_user_id, "file": info.filename})
+        # Skip stems already handled by the tdata pass to avoid double-import.
+        if stem in tdata_stems:
+            continue
+        _persist_session(
+            stem=stem,
+            is_subfolder=is_subfolder,
+            meta=sidecars.get(stem) or {},
+            filename=Path(info.filename.replace("\\", "/")).name,
+            session_bytes=zf.read(info),
+            source_label=info.filename,
+        )
 
     write_audit(db, actor=admin, action="account.import_zip",
                 detail={"imported": len(imported), "skipped": len(skipped)})
