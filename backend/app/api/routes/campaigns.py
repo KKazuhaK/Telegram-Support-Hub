@@ -103,13 +103,27 @@ def _scope_groups(user, requested: list[int]) -> list[int]:
 
 
 def _build_customer_records(db, campaign: Campaign, template: MessageTemplate, customer_ids: list[int] | None, now_iso: str) -> int:
-    stmt = select(Customer).where(Customer.consent.is_(True), Customer.status.in_(["new", "assigned", "failed", "queued"]))
+    # Two-pass with diagnostics so a 0-result tells the operator WHICH
+    # condition failed (consent / status / unassigned), not just "0
+    # targets". Stored on Campaign.extra_params for the UI to surface.
+    base = select(Customer)
     if customer_ids:
-        stmt = stmt.where(Customer.id.in_(customer_ids))
-    customers = list(db.scalars(stmt))
-    for customer in customers:
-        if not customer.assigned_account_id:
-            continue
+        base = base.where(Customer.id.in_(customer_ids))
+    all_pool = list(db.scalars(base))
+
+    no_consent = [c for c in all_pool if not c.consent]
+    wrong_status = [c for c in all_pool
+                    if c.consent and c.status not in ("new", "assigned", "failed", "queued")]
+    unassigned = [c for c in all_pool
+                  if c.consent
+                  and c.status in ("new", "assigned", "failed", "queued")
+                  and not c.assigned_account_id]
+    eligible = [c for c in all_pool
+                if c.consent
+                and c.status in ("new", "assigned", "failed", "queued")
+                and c.assigned_account_id]
+
+    for customer in eligible:
         rendered = render_message(template.body, {
             "name": customer.name, "phone": customer.phone, "source": customer.source,
         })
@@ -124,7 +138,17 @@ def _build_customer_records(db, campaign: Campaign, template: MessageTemplate, c
             next_run_at=now_iso,
         ))
         customer.status = "queued"
-    return len([c for c in customers if c.assigned_account_id])
+
+    if not eligible:
+        # Surface diagnostics to the caller so the 400 detail can be
+        # specific. Stashed via a custom attribute the route reads.
+        campaign._eligibility_diag = {  # type: ignore[attr-defined]
+            "total": len(all_pool),
+            "no_consent": len(no_consent),
+            "wrong_status": len(wrong_status),
+            "unassigned": len(unassigned),
+        }
+    return len(eligible)
 
 
 def _build_friend_records(db, campaign: Campaign, template: MessageTemplate, group_ids: list[int],
@@ -262,7 +286,22 @@ def create_campaign(payload: CampaignCreate, db: DbSession, user: CurrentUserDep
         else:  # imported_target_broadcast
             count = build_imported_target_records(db, campaign, template, group_ids, payload.imported_targets or [])
         if count == 0:
+            diag = getattr(campaign, "_eligibility_diag", None)
             db.rollback()
+            if diag:
+                # Tailored message for customer_broadcast so the operator
+                # doesn't have to guess WHICH gate cut them off.
+                parts = [f"共筛选到 {diag['total']} 个客户"]
+                if diag["no_consent"]:
+                    parts.append(f"{diag['no_consent']} 个 consent=false（导入时未勾「假设已同意」）")
+                if diag["wrong_status"]:
+                    parts.append(f"{diag['wrong_status']} 个状态不在 new/assigned/failed/queued")
+                if diag["unassigned"]:
+                    parts.append(f"{diag['unassigned']} 个未分配 TG 账号（去客户管理点「分配」）")
+                raise HTTPException(
+                    status_code=400,
+                    detail="；".join(parts) + " — 没有满足全部条件的目标",
+                )
             raise HTTPException(status_code=400, detail="没有满足条件的目标，请检查授权状态/分配/好友列表")
     else:
         # batch_op / modify_info: no per-target message rows queued today.
