@@ -5,11 +5,15 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Build deps for the C extensions opentele pulls in (tgcrypto). Removed
-# after pip install so the runtime image doesn't carry the compiler.
+# Build deps for the C extensions opentele pulls in (tgcrypto). They're
+# purged after install so the runtime image stays lean. Runtime libs
+# (libglib2.0-0 = libgthread; libxkbcommon0 + libgl1 for PyQt5 used by
+# opentele's binary parser) MUST stay installed.
 COPY requirements.txt .
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc python3-dev libffi-dev \
+    && apt-get install -y --no-install-recommends \
+        gcc python3-dev libffi-dev \
+        libglib2.0-0 libxkbcommon0 libgl1 libdbus-1-3 libfontconfig1 \
     && pip install --no-cache-dir -r requirements.txt \
     && apt-get purge -y --auto-remove gcc python3-dev libffi-dev \
     && rm -rf /var/lib/apt/lists/*
