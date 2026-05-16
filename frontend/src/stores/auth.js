@@ -19,20 +19,29 @@ export const useAuthStore = defineStore('auth', {
       role: stored.role || '',
       agentId: stored.agentId || null,
       username: stored.username || '',
+      actorKind: stored.actorKind || 'support_agent',
+      actorId: stored.actorId || 0,
     }
   },
   getters: {
     isAuthenticated: (state) => !!state.token,
-    isAdmin: (state) => state.role === 'admin' || state.role === 'supervisor',
+    isAdmin: (state) => state.actorKind === 'support_agent'
+      && (state.role === 'admin' || state.role === 'supervisor'),
+    isSupportAgent: (state) => state.actorKind === 'support_agent',
+    isBusinessAgent: (state) => state.actorKind === 'business_agent',
+    isMerchant: (state) => state.actorKind === 'merchant',
   },
   actions: {
-    setSession({ token, role, agentId, username }) {
+    setSession({ token, role, agentId, username, actorKind, actorId }) {
       this.token = token
       this.role = role
       this.agentId = agentId
       this.username = username || this.username
+      this.actorKind = actorKind || 'support_agent'
+      this.actorId = actorId || 0
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         token, role, agentId, username: this.username,
+        actorKind: this.actorKind, actorId: this.actorId,
       }))
     },
     logout() {
@@ -40,6 +49,8 @@ export const useAuthStore = defineStore('auth', {
       this.role = ''
       this.agentId = null
       this.username = ''
+      this.actorKind = 'support_agent'
+      this.actorId = 0
       localStorage.removeItem(STORAGE_KEY)
     },
   },

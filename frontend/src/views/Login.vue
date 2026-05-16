@@ -6,7 +6,14 @@
         <el-tab-pane label="登录" name="login" />
         <el-tab-pane :label="bootstrapTabLabel" name="bootstrap" :disabled="hasAdmin" />
       </el-tabs>
-      <el-form :model="form" label-width="80px" @submit.prevent>
+      <el-form :model="form" label-width="84px" @submit.prevent>
+        <el-form-item v-if="mode === 'login'" label="登录身份">
+          <el-radio-group v-model="form.actorKind" size="default">
+            <el-radio-button value="support_agent">客服 / 管理员</el-radio-button>
+            <el-radio-button value="business_agent">商务代理</el-radio-button>
+            <el-radio-button value="merchant">商家</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="用户名">
           <el-input v-model="form.username" autocomplete="username" />
         </el-form-item>
@@ -40,7 +47,13 @@ const auth = useAuthStore()
 const mode = ref('login')
 const loading = ref(false)
 const hasAdmin = ref(false)
-const form = reactive({ username: '', password: '', nickname: '' })
+const form = reactive({ username: '', password: '', nickname: '', actorKind: 'support_agent' })
+
+const LOGIN_PATHS = {
+  support_agent: '/auth/login',
+  business_agent: '/auth/business-login',
+  merchant: '/auth/merchant-login',
+}
 
 const bootstrapTabLabel = computed(() => (hasAdmin.value ? '初始化管理员（已禁用）' : '初始化管理员'))
 
@@ -77,7 +90,9 @@ async function submit() {
   }
   loading.value = true
   try {
-    const url = mode.value === 'login' ? '/auth/login' : '/auth/bootstrap-admin'
+    const url = mode.value === 'login'
+      ? LOGIN_PATHS[form.actorKind]
+      : '/auth/bootstrap-admin'
     const payload = mode.value === 'login'
       ? { username: form.username, password: form.password }
       : { username: form.username, password: form.password, nickname: form.nickname || undefined }
@@ -87,6 +102,8 @@ async function submit() {
       role: data.role,
       agentId: data.agent_id,
       username: form.username,
+      actorKind: data.actor_kind || 'support_agent',
+      actorId: data.actor_id || data.agent_id || 0,
     })
     ElMessage.success(mode.value === 'login' ? '登录成功' : '管理员已创建')
     router.push(route.query.next || { name: 'dashboard' })

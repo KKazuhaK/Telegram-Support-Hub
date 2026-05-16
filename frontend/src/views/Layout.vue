@@ -22,17 +22,19 @@
             <template #title>{{ t('menu.friends') }}</template>
           </el-menu-item>
 
-          <template v-if="auth.isAdmin">
-            <el-menu-item index="business-agents" :route="{ name: 'business-agents' }">
-              <el-icon><Briefcase /></el-icon>
-              <template #title>{{ t('menu.business_agents') }}</template>
-            </el-menu-item>
+          <el-menu-item v-if="auth.isAdmin" index="business-agents" :route="{ name: 'business-agents' }">
+            <el-icon><Briefcase /></el-icon>
+            <template #title>{{ t('menu.business_agents') }}</template>
+          </el-menu-item>
 
-            <el-menu-item index="merchants" :route="{ name: 'merchants' }">
-              <el-icon><Shop /></el-icon>
-              <template #title>{{ t('menu.merchants') }}</template>
-            </el-menu-item>
-          </template>
+          <el-menu-item
+            v-if="auth.isAdmin || auth.isBusinessAgent"
+            index="merchants"
+            :route="{ name: 'merchants' }"
+          >
+            <el-icon><Shop /></el-icon>
+            <template #title>{{ t('menu.merchants') }}</template>
+          </el-menu-item>
 
           <el-menu-item index="account-groups" :route="{ name: 'account-groups' }">
             <el-icon><Collection /></el-icon>
@@ -215,6 +217,8 @@ const isFullscreen = ref(false)
 const status = reactive({ has_admin: false, accounts: null, customers: null, workersOk: false })
 
 const roleLabel = computed(() => {
+  if (auth.actorKind === 'business_agent') return '商务代理'
+  if (auth.actorKind === 'merchant') return '商家'
   if (!auth.role) return ''
   return t(`common.role_${auth.role}`)
 })
