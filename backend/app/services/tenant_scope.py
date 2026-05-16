@@ -42,6 +42,32 @@ def apply_merchant_scope(stmt, user, db: Session, model):
     return stmt.where(model.merchant_id.in_(ids))
 
 
+def default_merchant_id(user) -> int | None:
+    """Return the `merchant_id` to stamp on rows that this actor creates.
+
+    - support_agent (admin / supervisor / agent): None (legacy bucket;
+      admin can later re-assign via batch edit if needed).
+    - merchant: own actor_id — the row belongs to the caller's tenant.
+    - business_agent: None — BAs don't own data, they oversee merchants.
+      A future create-on-behalf-of-merchant flow would pass merchant_id
+      explicitly, not via this auto-fill helper.
+    """
+    return user.actor_id if user.actor_kind == "merchant" else None
+
+
+def can_write_tenant_data(user) -> bool:
+    """Whether this actor may create / mutate tenant-scoped rows
+    (customers, campaigns) on its own merchant. Decoupled from the
+    per-group `can_broadcast` permission used inside the support_agent
+    scope, because tenant actors don't go through that permission table."""
+    if user.actor_kind == "merchant":
+        return True
+    if user.actor_kind == "support_agent":
+        return user.is_admin or user.can("can_broadcast")
+    # business_agent reads but doesn't write tenant data.
+    return False
+
+
 def can_access_row(user, db: Session, row) -> bool:
     """Return True if `user` is allowed to read/mutate `row`. Used by
     PATCH/DELETE/lifecycle endpoints to block cross-tenant IDOR.

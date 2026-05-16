@@ -16,7 +16,9 @@ from backend.app.services.permissions import permission_denied_detail
 from backend.app.services.serializers import list_dict, to_dict
 from backend.app.services.template_engine import render_message
 from backend.app.services.template_renderer import render_template
-from backend.app.services.tenant_scope import apply_merchant_scope, can_access_row
+from backend.app.services.tenant_scope import (
+    apply_merchant_scope, can_access_row, can_write_tenant_data, default_merchant_id,
+)
 
 router = APIRouter()
 
@@ -78,12 +80,15 @@ class CampaignCreate(BaseModel):
 
 
 def _require_broadcast(user) -> None:
-    if not (user.is_admin or user.can("can_broadcast")):
+    if not can_write_tenant_data(user):
         raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
 
 
 def _scope_groups(user, requested: list[int]) -> list[int]:
-    if user.is_admin:
+    if user.is_admin or user.actor_kind in ("business_agent", "merchant"):
+        # Tenant actors are already filtered by merchant_id at query time;
+        # don't intersect with support_agent group permissions (which
+        # would always be empty for them).
         return requested
     visible = set(user.visible_group_ids())
     if not requested:
@@ -243,6 +248,7 @@ def create_campaign(payload: CampaignCreate, db: DbSession, user: CurrentUserDep
         target_count=0,
         queued_count=0,
         created_by=user.username,
+        merchant_id=default_merchant_id(user),
     )
     db.add(campaign)
     db.flush()

@@ -10,7 +10,10 @@ from backend.app.services.audit import write_audit
 from backend.app.services.parsers import parse_customer_text
 from backend.app.services.permissions import permission_denied_detail
 from backend.app.services.serializers import list_dict, to_dict
-from backend.app.services.tenant_scope import apply_merchant_scope, can_access_row
+from backend.app.services.tenant_scope import (
+    apply_merchant_scope, can_access_row, can_write_tenant_data,
+    default_merchant_id, visible_merchant_ids,
+)
 
 router = APIRouter()
 
@@ -73,7 +76,7 @@ def list_customers(
 
 @router.post("/import")
 def import_customers(payload: CustomerImport, db: DbSession, user: CurrentUserDep) -> dict:
-    if not (user.is_admin or user.can("can_broadcast")):
+    if not can_write_tenant_data(user):
         raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
 
     imported, rejected = parse_customer_text(payload.text, payload.source, payload.assume_consent)
@@ -81,12 +84,14 @@ def import_customers(payload: CustomerImport, db: DbSession, user: CurrentUserDe
     created_ids: list[int] = []
     duplicated: list[str] = []
 
+    tenant_merchant_id = default_merchant_id(user)
+
     for item in imported:
         existing = db.scalar(select(Customer).where(Customer.phone == item["phone"]))
         if existing:
             duplicated.append(item["phone"])
             continue
-        customer = Customer(**item)
+        customer = Customer(**item, merchant_id=tenant_merchant_id)
         db.add(customer)
         db.flush()
         created.append(to_dict(customer))
@@ -125,8 +130,7 @@ def import_customers(payload: CustomerImport, db: DbSession, user: CurrentUserDe
 def update_customer(
     customer_id: int, payload: CustomerUpdate, db: DbSession, user: CurrentUserDep,
 ) -> dict:
-    if not (user.is_admin or user.can("can_broadcast")
-            or user.actor_kind in ("business_agent", "merchant")):
+    if not can_write_tenant_data(user):
         raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
     row = db.get(Customer, customer_id)
     if not row or not can_access_row(user, db, row):
@@ -145,8 +149,7 @@ def update_customer(
 
 @router.delete("/{customer_id}")
 def delete_customer(customer_id: int, db: DbSession, user: CurrentUserDep) -> dict:
-    if not (user.is_admin or user.can("can_broadcast")
-            or user.actor_kind in ("business_agent", "merchant")):
+    if not can_write_tenant_data(user):
         raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
     row = db.get(Customer, customer_id)
     if not row or not can_access_row(user, db, row):
@@ -187,7 +190,14 @@ def list_friends(
         stmt = stmt.where(Friend.account_id == account_id)
     if status:
         stmt = stmt.where(Friend.status == status)
-    if not user.is_admin:
+
+    # Friend has no merchant_id column of its own — scope via the parent
+    # Account's merchant_id for tenant actors.
+    if user.actor_kind != "support_agent":
+        ids = visible_merchant_ids(user, db) or [-1]
+        tenant_acc_subq = select(Account.id).where(Account.merchant_id.in_(ids))
+        stmt = stmt.where(Friend.account_id.in_(tenant_acc_subq))
+    elif not user.is_admin:
         member_subq = select(AccountGroupMember.account_id).where(
             AccountGroupMember.group_id.in_(user.visible_group_ids() or [-1])
         )
