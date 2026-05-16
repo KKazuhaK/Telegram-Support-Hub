@@ -42,15 +42,32 @@ def _make_sqlite_engine():
 def _make_mariadb_engine():
     # Late import so app config picks up any MYSQL_* env vars the CI sets.
     from backend.app.core.config import settings
-    return sqlalchemy.create_engine(
+    from sqlalchemy import event
+
+    engine = sqlalchemy.create_engine(
         settings.database_url,
-        pool_pre_ping=True,
-        # Cap connection churn — many tests open short-lived SessionLocal()
-        # blocks; TCP/auth overhead per connection dominates on CI otherwise.
-        pool_size=5,
-        max_overflow=2,
+        # NullPool means each session opens its own short-lived connection
+        # and returns it to the OS on close. A real pool combined with a
+        # leaked test setUp connection (FK violation → no tearDown) drained
+        # the pool in CI and downstream tests stalled 30s on pool_timeout.
+        poolclass=sqlalchemy.pool.NullPool,
         future=True,
     )
+
+    # Match SQLite's default behavior: don't enforce FK constraints inside
+    # tests. Tests share a single DB across classes and clean tables in
+    # ad-hoc orders; with FKs enforced, deleting a parent that has stale
+    # children from a prior test class raises and breaks isolation.
+    # Production runs with FKs ENABLED — that's what Alembic + the live
+    # MariaDB do; this relax-for-tests is exactly the same compromise we
+    # already had on the SQLite test backend.
+    @event.listens_for(engine, "connect")
+    def _disable_fk(dbapi_conn, _record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+        cursor.close()
+
+    return engine
 
 
 def _wipe_all_tables_mariadb(engine):
