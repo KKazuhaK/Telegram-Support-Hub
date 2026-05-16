@@ -46,6 +46,9 @@ jobs:
   test-mariadb:
     name: Test (MariaDB 11.4)
     runs-on: ubuntu-latest
+    # Hard cap so a stuck test (FOR UPDATE deadlock, broker retry loop,
+    # whatever) doesn't burn 6 hours of runner time silently.
+    timeout-minutes: 15
 
     # Catches SQLite vs MariaDB dialect drift (JSON column comparison,
     # SELECT FOR UPDATE, case sensitivity, charset). Same test suite,
@@ -89,7 +92,9 @@ jobs:
           AUTO_MIGRATE_COLUMNS: "false"
           APP_SECRET: ci-test-secret
           APP_JWT_SECRET: ci-test-jwt-secret
-        run: python -m unittest discover -s tests -p "test_*.py"
+        # -u unbuffered so we can see which test is running when CI hangs;
+        # -v prints each test name as it starts.
+        run: python -u -m unittest discover -s tests -p "test_*.py" -v
 
   docker:
     name: Build and publish Docker image

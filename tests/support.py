@@ -43,8 +43,29 @@ def _make_mariadb_engine():
     # Late import so app config picks up any MYSQL_* env vars the CI sets.
     from backend.app.core.config import settings
     return sqlalchemy.create_engine(
-        settings.database_url, pool_pre_ping=True, future=True,
+        settings.database_url,
+        pool_pre_ping=True,
+        # Cap connection churn — many tests open short-lived SessionLocal()
+        # blocks; TCP/auth overhead per connection dominates on CI otherwise.
+        pool_size=5,
+        max_overflow=2,
+        future=True,
     )
+
+
+def _wipe_all_tables_mariadb(engine):
+    """Drop every table while ignoring FK constraints. MariaDB refuses to
+    drop a referenced table by default; with 28 cross-FK references in
+    this schema, SQLAlchemy's dependency-sorted drop_all still hits a
+    `Cannot drop ... foreign key constraint fails` race on first run
+    when leftover rows from a prior CI invocation reference each other.
+    """
+    with engine.begin() as conn:
+        conn.execute(sqlalchemy.text("SET FOREIGN_KEY_CHECKS = 0"))
+        try:
+            Base.metadata.drop_all(bind=conn)
+        finally:
+            conn.execute(sqlalchemy.text("SET FOREIGN_KEY_CHECKS = 1"))
 
 
 def install_sqlite_session() -> sessionmaker:
@@ -69,7 +90,10 @@ def install_sqlite_session() -> sessionmaker:
     # is a no-op the first time; on MariaDB it wipes any leftover tables
     # from a prior CI run (matters when re-runs use the same service
     # container).
-    Base.metadata.drop_all(bind=engine)
+    if backend == "mariadb":
+        _wipe_all_tables_mariadb(engine)
+    else:
+        Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
