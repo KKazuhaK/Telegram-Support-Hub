@@ -18,6 +18,7 @@ from backend.app.api.routes import (
     phones_items,
     proxies,
     proxy_groups,
+    quick_replies,
     stats,
     templates,
     translate,
@@ -45,4 +46,5 @@ api_router.include_router(materials_items.router, prefix="/materials", tags=["ma
 api_router.include_router(business_agents.router, prefix="/business-agents", tags=["business-agents"])
 api_router.include_router(merchants.router, prefix="/merchants", tags=["merchants"])
 api_router.include_router(translate.router, prefix="/translate", tags=["translate"])
+api_router.include_router(quick_replies.router, prefix="/quick-replies", tags=["quick-replies"])
 api_router.include_router(ws.router, prefix="/ws", tags=["ws"])

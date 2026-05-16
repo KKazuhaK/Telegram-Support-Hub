@@ -97,7 +97,7 @@
       <footer class="chat-input">
         <div class="input-toolbar">
           <span class="hint">发送账号：</span>
-          <el-select v-model="sendAccountId" size="small" filterable placeholder="选择 TG 账号">
+          <el-select v-model="sendAccountId" size="small" filterable placeholder="选择 TG 账号" style="width: 200px;">
             <el-option
               v-for="a in eligibleAccounts"
               :key="a.id"
@@ -105,6 +105,17 @@
               :value="a.id"
             />
           </el-select>
+          <el-divider direction="vertical" />
+          <el-button size="small" link @click="openQuickReplyDrawer">
+            <el-icon><ChatLineSquare /></el-icon>&nbsp;话术
+          </el-button>
+          <el-button size="small" link @click="openTranslatePanel">
+            <el-icon><ChatRound /></el-icon>&nbsp;翻译面板
+          </el-button>
+          <el-checkbox v-model="autoTranslateOnSend" size="small" class="auto-tr-toggle">
+            发送前翻译成客户语言
+            <span v-if="customerLang" class="lang-hint">（{{ customerLang }}）</span>
+          </el-checkbox>
         </div>
         <div class="input-row">
           <el-input
@@ -129,13 +140,61 @@
     <section v-else class="chat-main empty-state">
       <el-empty description="选择一位客户开始对话" />
     </section>
+
+    <!-- Quick-reply (话术) drawer — pick a saved script to insert into the input. -->
+    <el-drawer v-model="quickReplyDrawer" title="话术" size="420px">
+      <el-tabs v-model="quickReplyTab">
+        <el-tab-pane label="个人话术" name="personal" />
+        <el-tab-pane label="公共话术" name="public" />
+      </el-tabs>
+      <div v-if="quickReplyTab === 'personal'" class="qr-add">
+        <el-input
+          v-model="qrDraft"
+          type="textarea"
+          :rows="2"
+          placeholder="输入新话术内容…"
+        />
+        <el-button type="primary" :disabled="!qrDraft.trim()" @click="createQuickReply">
+          添加
+        </el-button>
+      </div>
+      <el-divider v-if="quickReplyTab === 'personal'" style="margin: 8px 0;" />
+      <div class="qr-list">
+        <div v-for="qr in scopedQuickReplies" :key="qr.id" class="qr-item">
+          <div class="qr-text" @click="insertQuickReply(qr)">{{ qr.text }}</div>
+          <el-button
+            v-if="canEditQuickReply(qr)"
+            size="small" link type="danger"
+            @click.stop="deleteQuickReply(qr)"
+          >删除</el-button>
+        </div>
+        <div v-if="!scopedQuickReplies.length" class="empty">
+          暂无{{ quickReplyTab === 'personal' ? '个人' : '公共' }}话术
+        </div>
+      </div>
+    </el-drawer>
+
+    <!-- Standalone translate panel — paste arbitrary text, translate to Chinese. -->
+    <el-drawer v-model="translatePanel" title="翻译面板" size="420px">
+      <el-form label-position="top">
+        <el-form-item label="原文">
+          <el-input v-model="trSrc" type="textarea" :rows="5" placeholder="粘贴或输入要翻译的文本" />
+        </el-form-item>
+        <el-form-item label="译文">
+          <el-input v-model="trDst" type="textarea" :rows="5" readonly />
+        </el-form-item>
+        <el-button type="primary" :loading="trBusy" :disabled="!trSrc.trim()" @click="runStandaloneTranslate">
+          翻译成中文
+        </el-button>
+      </el-form>
+    </el-drawer>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Refresh, Search } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Refresh, Search, ChatLineSquare, ChatRound } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 
@@ -158,6 +217,21 @@ let reconnectTimer = null
 let reconnectAttempt = 0
 let stopped = false
 
+// Quick-reply drawer state.
+const quickReplyDrawer = ref(false)
+const quickReplyTab = ref('personal')
+const quickReplies = ref([])
+const qrDraft = ref('')
+
+// Standalone translate panel state.
+const translatePanel = ref(false)
+const trSrc = ref('')
+const trDst = ref('')
+const trBusy = ref(false)
+
+// Outbound auto-translate.
+const autoTranslateOnSend = ref(false)
+
 const filteredCustomers = computed(() => {
   const q = search.value.trim().toLowerCase()
   if (!q) return customers.value
@@ -168,8 +242,21 @@ const filteredCustomers = computed(() => {
 })
 
 const eligibleAccounts = computed(() => {
-  return accounts.value.filter((a) => a.enabled && a.status === 'active')
+  // Tenant actors don't get account.status (hidden by sanitizer); rely
+  // on the existence of the row in the scoped list as 'usable'.
+  return accounts.value.filter((a) =>
+    a.status === undefined || (a.enabled && a.status === 'active'),
+  )
 })
+
+const scopedQuickReplies = computed(() => {
+  if (quickReplyTab.value === 'personal') {
+    return quickReplies.value.filter((q) => !q.is_public)
+  }
+  return quickReplies.value.filter((q) => q.is_public)
+})
+
+const customerLang = computed(() => selected.value?.last_source_lang || '')
 
 function initial(c) {
   return (c.name || c.phone || '?').slice(0, 1).toUpperCase()
@@ -249,6 +336,72 @@ function scrollToBottom() {
   if (el) el.scrollTop = el.scrollHeight
 }
 
+async function loadQuickReplies() {
+  try {
+    const { data } = await http.get('/quick-replies')
+    quickReplies.value = data || []
+  } catch (_) {}
+}
+
+function openQuickReplyDrawer() {
+  quickReplyDrawer.value = true
+  if (!quickReplies.value.length) loadQuickReplies()
+}
+
+async function createQuickReply() {
+  const text = qrDraft.value.trim()
+  if (!text) return
+  try {
+    await http.post('/quick-replies', { text })
+    qrDraft.value = ''
+    await loadQuickReplies()
+  } catch (_) {}
+}
+
+async function deleteQuickReply(qr) {
+  try {
+    await ElMessageBox.confirm(`确定删除话术：${qr.text.slice(0, 30)}？`, '删除话术')
+  } catch (_) { return }
+  await http.delete(`/quick-replies/${qr.id}`)
+  await loadQuickReplies()
+}
+
+function canEditQuickReply(qr) {
+  // Personal scripts editable by their owner; public only by admin
+  // (server enforces; frontend just hides the button optimistically).
+  if (qr.is_public) return auth.isAdmin
+  return qr.actor_kind === auth.actorKind && qr.actor_id === auth.actorId
+}
+
+function insertQuickReply(qr) {
+  draft.value = draft.value ? `${draft.value}\n${qr.text}` : qr.text
+  quickReplyDrawer.value = false
+}
+
+function openTranslatePanel() {
+  translatePanel.value = true
+  // Pre-fill with the last inbound message if there is one — common
+  // path is "I want to read what they said".
+  if (!trSrc.value && history.value.length) {
+    const lastIn = [...history.value].reverse().find((m) => m.direction === 'inbound')
+    if (lastIn) trSrc.value = lastIn.body_snapshot
+  }
+}
+
+async function runStandaloneTranslate() {
+  if (!trSrc.value.trim()) return
+  trBusy.value = true
+  try {
+    const { data } = await http.post('/translate', {
+      text: trSrc.value,
+      customer_id: selected.value?.id,
+    })
+    trDst.value = data.translated_text
+  } catch (_) {} finally {
+    trBusy.value = false
+  }
+}
+
 async function translateMessage(m) {
   if (m._translating || m._translated) return
   m._translating = true
@@ -264,10 +417,25 @@ async function translateMessage(m) {
 }
 
 async function send() {
-  const text = draft.value.trim()
+  let text = draft.value.trim()
   if (!text || !selected.value || !sendAccountId.value) return
   sending.value = true
   try {
+    if (autoTranslateOnSend.value) {
+      // Translate the draft into the customer's last detected language.
+      // If we don't know yet, the backend falls back to 'en'.
+      try {
+        const { data: tr } = await http.post('/translate', {
+          text, target: 'auto', customer_id: selected.value.id,
+        })
+        if (tr?.translated_text) text = tr.translated_text
+      } catch (_) {
+        // Translation failed; warn and abort send so the operator
+        // doesn't accidentally ship the un-translated Chinese.
+        ElMessage.warning('翻译失败，已取消发送（请取消勾选或稍后重试）')
+        return
+      }
+    }
     const { data } = await http.post(
       `/customers/${selected.value.id}/messages`,
       { account_id: sendAccountId.value, text },
@@ -474,8 +642,25 @@ onBeforeUnmount(() => { stopped = true; tearDownWs() })
   border-top: 1px solid var(--tg-border, #e5e6eb);
   background: var(--tg-surface, #fff);
 }
-.input-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.input-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
 .input-toolbar .hint { font-size: 12px; color: #888; }
+.auto-tr-toggle { margin-left: auto; font-size: 12px; }
+.auto-tr-toggle .lang-hint { color: #888; }
+
+.qr-add { display: flex; gap: 8px; align-items: flex-end; padding: 4px 0; }
+.qr-add .el-textarea { flex: 1; }
+.qr-list { max-height: calc(100vh - 280px); overflow-y: auto; }
+.qr-item {
+  padding: 8px;
+  border-bottom: 1px solid var(--tg-border, #eee);
+  display: flex; gap: 8px; align-items: flex-start;
+}
+.qr-item .qr-text {
+  flex: 1; cursor: pointer; white-space: pre-wrap; word-break: break-word;
+  font-size: 13px; line-height: 1.5;
+}
+.qr-item:hover { background: rgba(0, 0, 0, 0.02); }
+.qr-list .empty { padding: 20px; color: #aaa; font-size: 12px; text-align: center; }
 .input-row { display: flex; gap: 8px; align-items: flex-end; }
 .input-row .el-textarea { flex: 1; }
 </style>

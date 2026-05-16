@@ -20,6 +20,10 @@ class Customer(Base, TimestampMixin):
     last_read_at: Mapped[str | None] = mapped_column(String(64))
     last_reply_at: Mapped[str | None] = mapped_column(String(64))
     last_reply_text: Mapped[str | None] = mapped_column(Text)
+    # ISO-639 code detected from the customer's most recent inbound message
+    # (e.g. 'en', 'ru'). Used by the chat UI to translate operator drafts
+    # back to the customer's language before send.
+    last_source_lang: Mapped[str | None] = mapped_column(String(16))
     merchant_id: Mapped[int | None] = mapped_column(ForeignKey("merchants.id"), index=True)
 
 
