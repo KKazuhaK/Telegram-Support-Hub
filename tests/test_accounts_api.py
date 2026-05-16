@@ -233,5 +233,89 @@ class AccountsBatchApiTestCase(unittest.TestCase):
         self.assertEqual(resp.status_code, 403)
 
 
+class ImportZipFlatLayoutTestCase(unittest.TestCase):
+    """import-zip should accept the flat layout produced by common
+    session-export tools (tdesktop, telethon helpers):
+
+        <user_id>.session
+        <user_id>.json         (optional metadata: phone, twofa, ...)
+
+    In addition to the existing `<user_id>/file.session` subfolder form.
+    """
+
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+        with SessionLocal() as db:
+            for model in (
+                AccountProxyLog, AccountGroupMember, Account, AccountGroup,
+                SupportAgentGroupPermission, SupportAgent,
+            ):
+                for row in db.query(model).all():
+                    db.delete(row)
+            db.commit()
+
+        bootstrap = self.client.post(
+            "/api/auth/bootstrap-admin",
+            json={"username": "root", "password": "12345678"},
+        )
+        self.auth = {"Authorization": f"Bearer {bootstrap.json()['access_token']}"}
+
+    def _upload(self, entries: dict[str, bytes]) -> dict:
+        zip_bytes = _make_zip(entries)
+        return self.client.post(
+            "/api/accounts/import-zip",
+            files={"sessions": ("sessions.zip", zip_bytes, "application/zip")},
+            headers=self.auth,
+        ).json()
+
+    def test_flat_layout_imported(self) -> None:
+        body = self._upload({
+            "12792412211.session": b"fake-session-bytes",
+        })
+        self.assertEqual(len(body["imported"]), 1, body)
+        self.assertEqual(body["imported"][0]["user_id"], "12792412211")
+        with SessionLocal() as db:
+            acc = db.query(Account).filter(Account.tg_user_id == "12792412211").one()
+            self.assertTrue(acc.session_path.endswith("12792412211.session"))
+
+    def test_flat_layout_with_json_sidecar_populates_phone(self) -> None:
+        sidecar = (
+            b'{"phone": "12792412211", "twofa": "qq1122", '
+            b'"api_id": 2040, "user_id": ""}'
+        )
+        body = self._upload({
+            "12792412211.session": b"fake-session-bytes",
+            "12792412211.json": sidecar,
+        })
+        self.assertEqual(len(body["imported"]), 1, body)
+        with SessionLocal() as db:
+            acc = db.query(Account).filter(Account.tg_user_id == "12792412211").one()
+            self.assertEqual(acc.phone, "+12792412211")
+
+    def test_subfolder_layout_still_works(self) -> None:
+        body = self._upload({
+            "1001/acc.session": b"fake-session-bytes",
+        })
+        self.assertEqual(len(body["imported"]), 1, body)
+        self.assertEqual(body["imported"][0]["user_id"], "1001")
+
+    def test_malformed_json_sidecar_is_ignored(self) -> None:
+        # A broken JSON sidecar should not block the session itself
+        # from importing — silently skip the metadata.
+        body = self._upload({
+            "12792412211.session": b"fake-session-bytes",
+            "12792412211.json": b"{this is not valid json",
+        })
+        self.assertEqual(len(body["imported"]), 1, body)
+        with SessionLocal() as db:
+            acc = db.query(Account).filter(Account.tg_user_id == "12792412211").one()
+            self.assertIsNone(acc.phone)
+
+    def test_orphan_json_without_session_is_skipped(self) -> None:
+        # JSON sidecar with no matching .session should not create an account.
+        body = self._upload({"12792412211.json": b'{"phone": "12792412211"}'})
+        self.assertEqual(body["imported"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

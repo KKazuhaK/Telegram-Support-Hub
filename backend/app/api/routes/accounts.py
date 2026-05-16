@@ -1,3 +1,4 @@
+import json
 import re
 import zipfile
 from io import BytesIO
@@ -62,6 +63,49 @@ class AccountBatchDelete(BaseModel):
 def safe_part(value: str) -> str:
     part = re.sub(r"[^a-zA-Z0-9_.-]", "_", value.strip())
     return part[:100] or "unknown"
+
+
+def _user_id_from_zip_entry(filename: str) -> str | None:
+    """Map a zip entry path to a tg_user_id, accepting two layouts:
+
+    A. `<user_id>/<anything>.session`  (subfolder convention)
+    B. `<user_id>.session`             (flat layout, e.g. tdesktop exports)
+
+    Returns None when the path doesn't match either shape.
+    """
+    parts = [p for p in Path(filename.replace("\\", "/")).parts if p not in {"/", "."}]
+    if not parts:
+        return None
+    if len(parts) >= 2:
+        return safe_part(parts[0])
+    # Flat: '<user_id>.session' — strip the .session suffix from basename.
+    base = parts[0]
+    if base.lower().endswith(".session"):
+        return safe_part(base[: -len(".session")])
+    return None
+
+
+def _normalize_phone(raw: str | None) -> str | None:
+    """Accept '12792412211' / '+12792412211' / '+1 (279) 241-2211' and
+    return E.164-ish `+digits`. Returns None for empty / non-digit input."""
+    if not raw:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    return f"+{digits}" if digits else None
+
+
+def _parse_sidecar_metadata(raw: bytes) -> dict | None:
+    """Parse the optional `<user_id>.json` metadata file that ships with
+    common session exports (tdesktop, telethon dumpers). Returns None on
+    malformed JSON — callers ignore the metadata in that case rather
+    than blocking the session import."""
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
 def ensure_default_group(db: DbSession) -> AccountGroup:
@@ -163,23 +207,45 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="ZIP 文件损坏或格式不正确") from exc
 
+    # Pre-index optional sidecar JSON files by their basename stem so a
+    # `<user_id>.session` entry can pick up its `<user_id>.json` metadata
+    # in one pass. Subfolder layouts don't have sidecars; legacy callers
+    # are unaffected.
+    sidecars: dict[str, dict] = {}
+    for info in zf.infolist():
+        if info.is_dir() or not info.filename.lower().endswith(".json"):
+            continue
+        parts = [p for p in Path(info.filename.replace("\\", "/")).parts if p not in {"/", "."}]
+        if len(parts) != 1:
+            continue  # nested JSON — unrelated to our sidecar convention
+        meta = _parse_sidecar_metadata(zf.read(info))
+        if meta is None:
+            continue
+        stem = safe_part(parts[0][: -len(".json")])
+        sidecars[stem] = meta
+
     for info in zf.infolist():
         if info.is_dir() or not info.filename.lower().endswith(".session"):
             continue
-        parts = [part for part in Path(info.filename.replace("\\", "/")).parts if part not in {"/", "."}]
-        if len(parts) < 2:
-            skipped.append({"file": info.filename, "reason": "path must be userid/*.session"})
+        user_id = _user_id_from_zip_entry(info.filename)
+        if user_id is None:
+            skipped.append({"file": info.filename, "reason": "path must be <user_id>.session or <user_id>/*.session"})
             continue
-        user_id = safe_part(parts[0])
-        filename = safe_part(parts[-1])
+        filename = safe_part(Path(info.filename.replace("\\", "/")).name)
         account_dir = settings.session_dir / user_id
         account_dir.mkdir(parents=True, exist_ok=True)
         session_path = account_dir / filename
         session_path.write_bytes(zf.read(info))
 
+        meta = sidecars.get(user_id) or {}
+        phone_from_meta = _normalize_phone(meta.get("phone"))
+
         account = db.scalar(select(Account).where(Account.tg_user_id == user_id))
         if not account:
-            account = Account(tg_user_id=user_id, session_path=str(session_path), status="imported")
+            account = Account(
+                tg_user_id=user_id, session_path=str(session_path),
+                status="imported", phone=phone_from_meta,
+            )
             db.add(account)
             db.flush()
             db.add(AccountGroupMember(account_id=account.id, group_id=default_group.id, is_primary=True))
@@ -187,6 +253,10 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
             account.session_path = str(session_path)
             if account.status == "error":
                 account.status = "imported"
+            # Only populate phone on existing rows when it's currently empty,
+            # to avoid silently overwriting an operator's manual edit.
+            if phone_from_meta and not account.phone:
+                account.phone = phone_from_meta
         imported.append({"user_id": user_id, "file": info.filename})
 
     write_audit(db, actor=admin, action="account.import_zip",

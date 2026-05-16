@@ -17,6 +17,7 @@ data/
 .alembic_tmp.db
 .alembic_test.db
 .alembic_check.db
+temp
 
 # Claude Code local state (scheduling, agent runs)
 .claude/
