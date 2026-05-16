@@ -140,7 +140,8 @@
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="refresh">{{ t('common.refresh_page') }}</el-dropdown-item>
+                <el-dropdown-item command="console">客服工作台</el-dropdown-item>
+                <el-dropdown-item divided command="refresh">{{ t('common.refresh_page') }}</el-dropdown-item>
                 <el-dropdown-item command="closeOthers">{{ t('common.close_others') }}</el-dropdown-item>
                 <el-dropdown-item command="closeAll">{{ t('common.close_all') }}</el-dropdown-item>
                 <el-dropdown-item divided command="logout">{{ t('common.logout') }}</el-dropdown-item>
@@ -305,7 +306,9 @@ function scrollTabs(dir) {
 }
 
 function onUserCommand(cmd) {
-  if (cmd === 'logout') {
+  if (cmd === 'console') {
+    router.push({ name: 'console' })
+  } else if (cmd === 'logout') {
     auth.logout()
     tabsStore.closeAll()
     router.push({ name: 'login' })

@@ -106,7 +106,15 @@ async function submit() {
       actorId: data.actor_id || data.agent_id || 0,
     })
     ElMessage.success(mode.value === 'login' ? '登录成功' : '管理员已创建')
-    router.push(route.query.next || { name: 'dashboard' })
+    // The router's beforeEach + landingRouteFor() will redirect to the
+    // right home for the actor (support_agent role=agent → console).
+    if (route.query.next) {
+      router.push(route.query.next)
+    } else if (auth.actorKind === 'support_agent' && auth.role === 'agent') {
+      router.push({ name: 'console' })
+    } else {
+      router.push({ name: 'dashboard' })
+    }
   } finally {
     loading.value = false
   }

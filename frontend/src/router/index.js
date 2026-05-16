@@ -1,8 +1,30 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
+// Roles that should be sent to the focused agent workspace instead of
+// the full admin Layout on login. Admins/supervisors keep the full
+// view; merchant/business_agent get the admin Layout with their menu
+// items hidden by adminOnly checks (they still need the management
+// pages to administer their own scope).
+const CONSOLE_ROLES = new Set(['agent'])
+
+function landingRouteFor(auth) {
+  if (auth.actorKind === 'support_agent' && CONSOLE_ROLES.has(auth.role)) {
+    return { name: 'console' }
+  }
+  return { name: 'dashboard' }
+}
+
 const routes = [
   { path: '/login', name: 'login', component: () => import('@/views/Login.vue'), meta: { public: true } },
+  {
+    // Focused workspace for support_agent (role=agent). Admins and
+    // supervisors can also reach it via the user menu if they want to
+    // pinch-hit on chat; their main entry point remains '/'.
+    path: '/console',
+    name: 'console',
+    component: () => import('@/views/ConsoleLayout.vue'),
+  },
   {
     path: '/',
     component: () => import('@/views/Layout.vue'),
@@ -41,7 +63,12 @@ const routes = [
       { path: 'proxies', name: 'proxies', component: () => import('@/views/Proxies.vue'), meta: { title: '代理IP管理', adminOnly: true } },
     ],
   },
-  { path: '/:pathMatch(.*)*', redirect: { name: 'dashboard' } },
+  // Catch-all: send to the right landing based on actor role.
+  { path: '/:pathMatch(.*)*', redirect: (_to) => {
+      const auth = useAuthStore()
+      return auth.isAuthenticated ? landingRouteFor(auth) : { name: 'login' }
+    }
+  },
 ]
 
 const router = createRouter({
@@ -55,10 +82,16 @@ router.beforeEach((to) => {
     return { name: 'login', query: { next: to.fullPath } }
   }
   if (to.name === 'login' && auth.isAuthenticated) {
-    return { name: 'dashboard' }
+    return landingRouteFor(auth)
   }
   if (to.meta.adminOnly && !auth.isAdmin) {
-    return { name: 'dashboard' }
+    return landingRouteFor(auth)
+  }
+  // Plain support_agents shouldn't see the admin dashboard; route them
+  // to the console even if they hit '/' directly.
+  if (auth.actorKind === 'support_agent' && CONSOLE_ROLES.has(auth.role)
+      && to.path !== '/console' && to.name !== 'login') {
+    return { name: 'console' }
   }
   return true
 })
