@@ -118,7 +118,7 @@ Phase 6（产品化）：R12 → R13 → R14
 | ~~Alembic 没有真实增量迁移~~ | ✅ 2026-05-15 引入：`alembic.ini` + `backend/migrations/`（env.py 从 settings 读 URL，baseline revision 覆盖 20 张表）；容器 entrypoint 改 `python -m backend.migrate_then_serve`，自动 `upgrade head`（老库走 `stamp head` 避免重建表）；`AUTO_MIGRATE_COLUMNS` 保留为兜底；docs/alembic.md 工作流文档 | done |
 | ~~WebSocket 没有自动重连~~ | ✅ 2026-05-15 Replies.vue 加指数回退（1/2/4/8/16/30s）+ 卸载时取消重连定时器 | done |
 | ~~Celery `broker_connection_retry` 弃用警告~~ | ✅ 2026-05-15 设 `broker_connection_retry_on_startup = True` | done |
-| 测试用 SQLite，生产是 MariaDB | 二者 JSON 字段语义略有差异 | R1 改 schema 时加 MariaDB CI matrix |
+| ~~测试用 SQLite，生产是 MariaDB~~ | ✅ 2026-05-15 CI 加 `test-mariadb` job 起 mariadb:11.4 service container；`tests/support.py` 看 `TEST_DB_BACKEND` 切换；本地仍默认 SQLite | done |
 | `Customer` 模型实际是"号码 leads" | PRD 中 customer = 商户。后续要么 rename，要么在新 merchants 落地后把现 Customer 改名为 Lead | 等真正撞到命名冲突时再 rename，避免改名连带审计/历史断链 |
 
 ---
@@ -163,3 +163,4 @@ Phase 6（产品化）：R12 → R13 → R14
 - **2026-05-15** — 统计端点接 tenant scope：`stats._scoped_account_ids(user, db)` helper + `_scoped_count(model, pred, *where)`；`/api/statistics/{dashboard,accounts,account-groups,timeseries,timeseries.csv,message-details}` 全部按 actor 过滤，MessageRecord/Friend 通过 `Account.merchant_id` 子查询限制；admin 视图不变。Proxies 显式只给 support_agent（共享资源池语义）。6 个新 stats scope 测试（217 测试）。
 - **2026-05-15** — 提前清理剩余技术债：（1）Template / MaterialGroup / PhoneGroup 全部加 `merchant_id` + 列表 scope + create 自动盖戳；Proxy 保留 admin 共享池；旧 `unique=True` 改为 per-merchant 应用层校验。（2）审计日志 actor_kind 列 + tenant view：商户/BA 只见自己写的 audit 行，admin 不变。（3）Telethon `_classify_telethon_error`：6 类稳定 error_code（flood_wait/auth_invalid/password_invalid/network/rpc_error/unknown）替代裸 `type(exc).__name__`，便于 worker 决策重试策略。（4）N+1 修复：`/statistics/{accounts,account-groups,support-agents}` 三处原本每个 row 做 3 次 count 查询的循环，改为单批 GROUP BY 聚合到字典再 lookup —— 100 个账号从 300 query 降到 3 query。新增 11 个测试（228 测试）。
 - **2026-05-15** — Alembic 引入：`alembic.ini` + `backend/migrations/env.py`（从 settings 读 URL）+ baseline revision（覆盖 20 张表 / 28 处 `merchant_id` FK / 全部索引）；4 个 docker-compose 文件的 API service `command:` 改 `python -m backend.migrate_then_serve`，自动判断 alembic_version 存在与否做 `upgrade head` 或 `stamp head`，老库无缝接管；`AUTO_MIGRATE_COLUMNS` 保留为兜底；`docs/alembic.md` 工作流文档；228 测试不变。
+- **2026-05-15** — MariaDB CI matrix：`tests/support.py` 看 `TEST_DB_BACKEND` 选 backend（默认 SQLite，本地行为不变）；GitHub Actions 加 `test-mariadb` job 起 `mariadb:11.4` service container 跑同一套 228 测试，捕获 SQLite vs MariaDB 的 dialect 差异（JSON / SELECT FOR UPDATE / 大小写）；docker build job 依赖两个 test job 都过。
