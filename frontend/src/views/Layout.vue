@@ -85,6 +85,11 @@
             <el-menu-item v-if="auth.isAdmin" index="proxies" :route="{ name: 'proxies' }">{{ t('menu.proxies') }}</el-menu-item>
             <el-menu-item index="customers" :route="{ name: 'customers' }">{{ t('menu.customers') }}</el-menu-item>
           </el-sub-menu>
+
+          <el-menu-item v-if="auth.isAdmin" index="settings" :route="{ name: 'settings' }">
+            <el-icon><Setting /></el-icon>
+            <template #title>系统设置</template>
+          </el-menu-item>
         </el-menu>
       </el-scrollbar>
     </el-aside>
@@ -203,7 +208,7 @@ import {
   Fold, Expand, FullScreen, ArrowDown,
   Collection, Avatar, PieChart, Notebook,
   Briefcase, Shop, ChatDotRound, ChatLineRound,
-  Sunny, Moon, ArrowLeft, ArrowRight,
+  Sunny, Moon, ArrowLeft, ArrowRight, Setting,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()

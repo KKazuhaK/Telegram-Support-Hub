@@ -61,6 +61,7 @@ const routes = [
       { path: 'materials', name: 'materials', component: () => import('@/views/Materials.vue'), meta: { title: '文本数据' } },
       { path: 'files', name: 'files', component: () => import('@/views/Files.vue'), meta: { title: '文件管理', adminOnly: true } },
       { path: 'proxies', name: 'proxies', component: () => import('@/views/Proxies.vue'), meta: { title: '代理IP管理', adminOnly: true } },
+      { path: 'settings', name: 'settings', component: () => import('@/views/Settings.vue'), meta: { title: '系统设置', adminOnly: true } },
     ],
   },
   // Catch-all: send to the right landing based on actor role.

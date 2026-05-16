@@ -13,6 +13,7 @@ from backend.app.models.data_groups import (
 from backend.app.models.message import MessageRecord
 from backend.app.models.proxy import AccountProxyLog, ProxyEndpoint
 from backend.app.models.quick_reply import QuickReply
+from backend.app.models.system_setting import SystemSetting
 from backend.app.models.template import MessageTemplate
 from backend.app.models.tenant import BusinessAgent, Merchant
 
@@ -38,4 +39,5 @@ __all__ = [
     "QuickReply",
     "SupportAgent",
     "SupportAgentGroupPermission",
+    "SystemSetting",
 ]

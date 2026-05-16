@@ -274,7 +274,7 @@ def send_customer_message(
         from backend.app.services import translator
         target = cust.last_source_lang or "en"
         try:
-            translated_text, _src = translator._google_translate(text, target)
+            translated_text, _src = translator.translate(text, target)
         except RuntimeError as exc:
             raise HTTPException(
                 status_code=502,
@@ -363,7 +363,7 @@ def cache_message_translation(
 
     from backend.app.services import translator
     try:
-        translated, source = translator._google_translate(
+        translated, source = translator.translate(
             rec.body_snapshot or "", translator.DEFAULT_TARGET,
         )
     except RuntimeError as exc:

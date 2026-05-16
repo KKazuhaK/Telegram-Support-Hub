@@ -45,7 +45,7 @@ def translate_text(
         target = cust.last_source_lang or "en"  # fallback for new customers
 
     try:
-        translated, source = translator._google_translate(text, target)
+        translated, source = translator.translate(text, target)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=f"翻译服务暂时不可用：{exc}") from exc
 
