@@ -64,11 +64,31 @@
         >
           <div class="bubble">
             <div class="text">{{ m.body_snapshot }}</div>
+            <!-- Translated text appears below the original (only fetched
+                 when operator clicks 翻译; cached in m._translated). -->
+            <div v-if="m._translated" class="translated">
+              <span class="tag">译</span> {{ m._translated }}
+            </div>
             <div class="bubble-meta">
               <span>{{ formatTs(m.created_at) }}</span>
               <span v-if="m.direction === 'outbound'" class="status">
                 {{ statusLabel(m.status) }}
               </span>
+              <!-- Only offer translation on inbound foreign-language
+                   replies (no point translating our own Chinese). -->
+              <el-button
+                v-if="m.direction === 'inbound' && !m._translated"
+                size="small"
+                link
+                :loading="m._translating"
+                @click="translateMessage(m)"
+              >翻译</el-button>
+              <el-button
+                v-if="m._translated"
+                size="small"
+                link
+                @click="m._translated = ''"
+              >隐藏译文</el-button>
             </div>
           </div>
         </div>
@@ -212,7 +232,11 @@ async function loadHistory(customerId) {
   historyLoading.value = true
   try {
     const { data } = await http.get(`/customers/${customerId}/messages`)
-    history.value = data || []
+    // Pre-init translation fields so Vue's Proxy tracks them once we
+    // set them later from translateMessage().
+    history.value = (data || []).map((m) => ({
+      ...m, _translated: '', _translating: false,
+    }))
     await nextTick()
     scrollToBottom()
   } finally {
@@ -223,6 +247,20 @@ async function loadHistory(customerId) {
 function scrollToBottom() {
   const el = historyScroll.value?.wrapRef
   if (el) el.scrollTop = el.scrollHeight
+}
+
+async function translateMessage(m) {
+  if (m._translating || m._translated) return
+  m._translating = true
+  try {
+    const { data } = await http.post('/translate', { text: m.body_snapshot })
+    // Reactive assignment — Vue 3 picks up new properties on plain objects
+    // pulled from the API as long as the parent ref is reactive.
+    m._translated = data.translated_text
+  } catch (_) { /* http.js toasted already */
+  } finally {
+    m._translating = false
+  }
 }
 
 async function send() {
@@ -405,6 +443,24 @@ onBeforeUnmount(() => { stopped = true; tearDownWs() })
 }
 .bubble-row.out .bubble { background: #9eea6a; color: #1a1a1a; }
 .bubble .text { white-space: pre-wrap; word-break: break-word; }
+.bubble .translated {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.15);
+  font-size: 13px;
+  color: #555;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.bubble .translated .tag {
+  display: inline-block;
+  background: var(--el-color-primary-light-7);
+  color: var(--el-color-primary);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-right: 4px;
+  font-size: 11px;
+}
 .bubble-meta {
   margin-top: 4px;
   font-size: 11px;

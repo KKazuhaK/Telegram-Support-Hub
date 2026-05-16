@@ -20,6 +20,7 @@ from backend.app.api.routes import (
     proxy_groups,
     stats,
     templates,
+    translate,
     ws,
 )
 
@@ -43,4 +44,5 @@ api_router.include_router(materials.router, prefix="/material-groups", tags=["ma
 api_router.include_router(materials_items.router, prefix="/materials", tags=["materials"])
 api_router.include_router(business_agents.router, prefix="/business-agents", tags=["business-agents"])
 api_router.include_router(merchants.router, prefix="/merchants", tags=["merchants"])
+api_router.include_router(translate.router, prefix="/translate", tags=["translate"])
 api_router.include_router(ws.router, prefix="/ws", tags=["ws"])
