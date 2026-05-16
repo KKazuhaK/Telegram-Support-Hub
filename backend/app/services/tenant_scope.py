@@ -68,6 +68,25 @@ def can_write_tenant_data(user) -> bool:
     return False
 
 
+# Operational health fields the tenant (merchant / business_agent) is
+# deliberately not allowed to see — knowing which TG accounts are dead
+# or when the platform is back-filling inventory would expose internal
+# operations. Strip these from any account-shaped dict before returning
+# to a non-support_agent caller.
+TG_HEALTH_FIELDS = frozenset({
+    "status", "last_error", "last_login_at", "enabled", "avatar_status",
+})
+
+
+def sanitize_account_for_tenant(user, data: dict) -> dict:
+    """Drop TG health fields when the caller is not a support_agent.
+    Operates on plain dicts (post-`to_dict`) so it's cheap to apply to
+    list responses without touching ORM state."""
+    if user.actor_kind == "support_agent":
+        return data
+    return {k: v for k, v in data.items() if k not in TG_HEALTH_FIELDS}
+
+
 def can_access_row(user, db: Session, row) -> bool:
     """Return True if `user` is allowed to read/mutate `row`. Used by
     PATCH/DELETE/lifecycle endpoints to block cross-tenant IDOR.

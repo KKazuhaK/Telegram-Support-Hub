@@ -14,7 +14,9 @@ from backend.app.models.message import MessageRecord
 from backend.app.models.proxy import ProxyEndpoint
 from backend.app.services.export import to_csv_stream
 from backend.app.services.serializers import list_dict
-from backend.app.services.tenant_scope import apply_merchant_scope, visible_merchant_ids
+from backend.app.services.tenant_scope import (
+    apply_merchant_scope, sanitize_account_for_tenant, visible_merchant_ids,
+)
 
 router = APIRouter()
 
@@ -82,14 +84,29 @@ def dashboard(db: DbSession, user: CurrentUserDep) -> dict:
         msg_pred = MessageRecord.account_id.in_(acc_id_subq)
         friend_pred = Friend.account_id.in_(acc_id_subq)
 
-    return {
-        "accounts": {
+    # Tenant actors get the sanitized view: total + a single 'available'
+    # count (active OR imported, AND enabled). The operational breakdown
+    # (limited / error / imported_pending) is support-team-only so the
+    # tenant can't infer when we're back-filling or which TGs are dead.
+    if user.actor_kind == "support_agent":
+        accounts_section = {
             "total": _scoped_count(db, Account, acc_pred),
             "active": _scoped_count(db, Account, acc_pred, Account.status == "active", Account.enabled.is_(True)),
             "limited": _scoped_count(db, Account, acc_pred, Account.status == "limited"),
             "error": _scoped_count(db, Account, acc_pred, Account.status.in_(["error", "proxy_error"])),
             "imported_pending": _scoped_count(db, Account, acc_pred, Account.status == "imported"),
-        },
+        }
+    else:
+        accounts_section = {
+            "total": _scoped_count(db, Account, acc_pred),
+            "available": _scoped_count(
+                db, Account, acc_pred,
+                Account.status.in_(["active", "imported"]),
+                Account.enabled.is_(True),
+            ),
+        }
+    return {
+        "accounts": accounts_section,
         "account_groups": {
             "total": _scoped_count(
                 db, AccountGroup,
@@ -173,7 +190,7 @@ def per_account_stats(db: DbSession, user: CurrentUserDep) -> list[dict]:
         sent = sent_by.get(acc.id, 0)
         replied = replied_by.get(acc.id, 0)
         failed = failed_by.get(acc.id, 0)
-        out.append({
+        row = {
             "account_id": acc.id,
             "tg_user_id": acc.tg_user_id,
             "phone": acc.phone,
@@ -187,7 +204,10 @@ def per_account_stats(db: DbSession, user: CurrentUserDep) -> list[dict]:
             "msg_replied": replied,
             "msg_failed": failed,
             "reply_rate": (replied / sent) if sent else 0.0,
-        })
+        }
+        # Strip operational health fields (status / enabled / ...) for
+        # tenant actors; counters and identifiers remain.
+        out.append(sanitize_account_for_tenant(user, row))
     return out
 
 

@@ -18,7 +18,7 @@ from backend.app.services.port_quota import (
 )
 from backend.app.services.proxy_pool import PoolError, auto_assign_proxy
 from backend.app.services.serializers import list_dict, to_dict
-from backend.app.services.tenant_scope import apply_merchant_scope
+from backend.app.services.tenant_scope import apply_merchant_scope, sanitize_account_for_tenant
 
 router = APIRouter()
 
@@ -234,7 +234,10 @@ def list_accounts(
         stmt = stmt.where(Account.id.in_(
             select(AccountGroupMember.account_id).where(AccountGroupMember.group_id == group_id)
         ))
-    return list_dict(list(db.scalars(stmt.offset(offset).limit(limit))))
+    rows = list_dict(list(db.scalars(stmt.offset(offset).limit(limit))))
+    # Tenant actors (merchant / business_agent) must not see TG health
+    # fields — that's the support team's view. See tenant_scope.py.
+    return [sanitize_account_for_tenant(user, r) for r in rows]
 
 
 @router.post("/import-zip")
