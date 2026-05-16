@@ -14,6 +14,7 @@ from backend.app.models.message import MessageRecord
 from backend.app.models.proxy import ProxyEndpoint
 from backend.app.services.export import to_csv_stream
 from backend.app.services.serializers import list_dict
+from backend.app.services.tenant_scope import apply_merchant_scope, visible_merchant_ids
 
 router = APIRouter()
 
@@ -29,56 +30,117 @@ def _today_iso_prefix() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
+def _scoped_account_ids(db: DbSession, user) -> list[int] | None:
+    """Return the account-id allowlist for this actor, or None for
+    'no restriction' (admin / support_agent — separate logic applies)."""
+    if user.actor_kind == "support_agent":
+        return None
+    merchant_ids = visible_merchant_ids(user, db) or []
+    if not merchant_ids:
+        return []
+    return list(db.scalars(
+        select(Account.id).where(Account.merchant_id.in_(merchant_ids))
+    ))
+
+
+def _scoped_count(db, model, scope_pred, *where) -> int:
+    """Like count(...) but applies a tenant scope predicate to model.
+    scope_pred is a SQLAlchemy filter clause or None (no scoping)."""
+    stmt = select(func.count()).select_from(model)
+    if scope_pred is not None:
+        stmt = stmt.where(scope_pred)
+    if where:
+        stmt = stmt.where(*where)
+    return int(db.scalar(stmt) or 0)
+
+
 @router.get("/dashboard")
-def dashboard(db: DbSession, _: CurrentUserDep) -> dict:
+def dashboard(db: DbSession, user: CurrentUserDep) -> dict:
     today = _today_iso_prefix()
+    merchant_ids = visible_merchant_ids(user, db)
+    acc_pred = (
+        Account.merchant_id.in_(merchant_ids) if merchant_ids is not None
+        else None
+    )
+    if merchant_ids is not None and not merchant_ids:
+        # Tenant with no visible merchants — every count is 0.
+        acc_pred = Account.id == -1
+    cust_pred = (
+        Customer.merchant_id.in_(merchant_ids) if merchant_ids
+        else (Customer.id == -1 if merchant_ids == [] else None)
+    )
+    camp_pred = (
+        Campaign.merchant_id.in_(merchant_ids) if merchant_ids
+        else (Campaign.id == -1 if merchant_ids == [] else None)
+    )
+    # MessageRecord and Friend scope via Account.merchant_id JOIN.
+    msg_pred = friend_pred = None
+    if merchant_ids is not None:
+        acc_id_subq = select(Account.id).where(
+            Account.merchant_id.in_(merchant_ids or [-1])
+        )
+        msg_pred = MessageRecord.account_id.in_(acc_id_subq)
+        friend_pred = Friend.account_id.in_(acc_id_subq)
+
     return {
         "accounts": {
-            "total": count(db, Account),
-            "active": count(db, Account, Account.status == "active", Account.enabled.is_(True)),
-            "limited": count(db, Account, Account.status == "limited"),
-            "error": count(db, Account, Account.status.in_(["error", "proxy_error"])),
-            "imported_pending": count(db, Account, Account.status == "imported"),
+            "total": _scoped_count(db, Account, acc_pred),
+            "active": _scoped_count(db, Account, acc_pred, Account.status == "active", Account.enabled.is_(True)),
+            "limited": _scoped_count(db, Account, acc_pred, Account.status == "limited"),
+            "error": _scoped_count(db, Account, acc_pred, Account.status.in_(["error", "proxy_error"])),
+            "imported_pending": _scoped_count(db, Account, acc_pred, Account.status == "imported"),
         },
-        "account_groups": {"total": count(db, AccountGroup)},
-        "proxies": {
-            "total": count(db, ProxyEndpoint),
-            "active": count(db, ProxyEndpoint, ProxyEndpoint.status == "active"),
-            "error": count(db, ProxyEndpoint, ProxyEndpoint.status == "error"),
+        "account_groups": {
+            "total": _scoped_count(
+                db, AccountGroup,
+                AccountGroup.merchant_id.in_(merchant_ids or [-1]) if merchant_ids is not None else None,
+            ),
         },
+        # Proxies are a shared admin resource pool; tenant actors see 0.
+        "proxies": (
+            {
+                "total": count(db, ProxyEndpoint),
+                "active": count(db, ProxyEndpoint, ProxyEndpoint.status == "active"),
+                "error": count(db, ProxyEndpoint, ProxyEndpoint.status == "error"),
+            }
+            if user.actor_kind == "support_agent" else
+            {"total": 0, "active": 0, "error": 0}
+        ),
         "customers": {
-            "total": count(db, Customer),
-            "consented": count(db, Customer, Customer.consent.is_(True)),
-            "assigned": count(db, Customer, Customer.status == "assigned"),
-            "queued": count(db, Customer, Customer.status == "queued"),
-            "replied": count(db, Customer, Customer.status == "replied"),
-            "failed": count(db, Customer, Customer.status == "failed"),
+            "total": _scoped_count(db, Customer, cust_pred),
+            "consented": _scoped_count(db, Customer, cust_pred, Customer.consent.is_(True)),
+            "assigned": _scoped_count(db, Customer, cust_pred, Customer.status == "assigned"),
+            "queued": _scoped_count(db, Customer, cust_pred, Customer.status == "queued"),
+            "replied": _scoped_count(db, Customer, cust_pred, Customer.status == "replied"),
+            "failed": _scoped_count(db, Customer, cust_pred, Customer.status == "failed"),
         },
         "friends": {
-            "total": count(db, Friend),
-            "replied": count(db, Friend, Friend.status == "replied"),
-            "opted_out": count(db, Friend, Friend.opted_out.is_(True)),
+            "total": _scoped_count(db, Friend, friend_pred),
+            "replied": _scoped_count(db, Friend, friend_pred, Friend.status == "replied"),
+            "opted_out": _scoped_count(db, Friend, friend_pred, Friend.opted_out.is_(True)),
         },
         "campaigns": {
-            "total": count(db, Campaign),
-            "running": count(db, Campaign, Campaign.status == "running"),
-            "paused": count(db, Campaign, Campaign.status == "paused"),
-            "completed": count(db, Campaign, Campaign.status == "completed"),
+            "total": _scoped_count(db, Campaign, camp_pred),
+            "running": _scoped_count(db, Campaign, camp_pred, Campaign.status == "running"),
+            "paused": _scoped_count(db, Campaign, camp_pred, Campaign.status == "paused"),
+            "completed": _scoped_count(db, Campaign, camp_pred, Campaign.status == "completed"),
         },
         "messages": {
-            "queued": count(db, MessageRecord, MessageRecord.status.in_(["queued", "retry"])),
-            "sending": count(db, MessageRecord, MessageRecord.status == "sending"),
-            "sent": count(db, MessageRecord, MessageRecord.status == "sent"),
-            "replied": count(db, MessageRecord, MessageRecord.status == "replied"),
-            "failed": count(db, MessageRecord, MessageRecord.status.in_(["failed", "failed_permanent"])),
-            "sent_today": count(db, MessageRecord, MessageRecord.sent_at.like(f"{today}%")),
+            "queued": _scoped_count(db, MessageRecord, msg_pred, MessageRecord.status.in_(["queued", "retry"])),
+            "sending": _scoped_count(db, MessageRecord, msg_pred, MessageRecord.status == "sending"),
+            "sent": _scoped_count(db, MessageRecord, msg_pred, MessageRecord.status == "sent"),
+            "replied": _scoped_count(db, MessageRecord, msg_pred, MessageRecord.status == "replied"),
+            "failed": _scoped_count(db, MessageRecord, msg_pred, MessageRecord.status.in_(["failed", "failed_permanent"])),
+            "sent_today": _scoped_count(db, MessageRecord, msg_pred, MessageRecord.sent_at.like(f"{today}%")),
         },
     }
 
 
 @router.get("/accounts")
-def per_account_stats(db: DbSession, _: CurrentUserDep) -> list[dict]:
-    rows = list(db.scalars(select(Account).order_by(Account.id.asc())))
+def per_account_stats(db: DbSession, user: CurrentUserDep) -> list[dict]:
+    stmt = select(Account).order_by(Account.id.asc())
+    stmt = apply_merchant_scope(stmt, user, db, Account)
+    rows = list(db.scalars(stmt))
     out = []
     for acc in rows:
         sent = count(db, MessageRecord, MessageRecord.account_id == acc.id, MessageRecord.status == "sent")
@@ -104,8 +166,10 @@ def per_account_stats(db: DbSession, _: CurrentUserDep) -> list[dict]:
 
 
 @router.get("/account-groups")
-def per_group_stats(db: DbSession, _: CurrentUserDep) -> list[dict]:
-    groups = list(db.scalars(select(AccountGroup).order_by(AccountGroup.id.asc())))
+def per_group_stats(db: DbSession, user: CurrentUserDep) -> list[dict]:
+    stmt = select(AccountGroup).order_by(AccountGroup.id.asc())
+    stmt = apply_merchant_scope(stmt, user, db, AccountGroup)
+    groups = list(db.scalars(stmt))
     out = []
     for g in groups:
         member_ids = [m.account_id for m in db.scalars(
@@ -217,7 +281,7 @@ def _bucket_for(iso_str: str | None, bucket: str) -> str | None:
 
 @router.get("/timeseries")
 def timeseries(
-    db: DbSession, _: CurrentUserDep,
+    db: DbSession, user: CurrentUserDep,
     from_date: str | None = Query(None, alias="from"),
     to_date: str | None = Query(None, alias="to"),
     bucket: str = "day",
@@ -231,7 +295,11 @@ def timeseries(
     - failed: records whose status is failed/failed_permanent dated by
       created_at (failed sends often lack a sent_at)
     """
-    rows = list(db.scalars(select(MessageRecord)))
+    stmt = select(MessageRecord)
+    acc_ids = _scoped_account_ids(db, user)
+    if acc_ids is not None:
+        stmt = stmt.where(MessageRecord.account_id.in_(acc_ids or [-1]))
+    rows = list(db.scalars(stmt))
     buckets: dict[str, dict[str, int]] = defaultdict(
         lambda: {"sent": 0, "read": 0, "replied": 0, "failed": 0}
     )
@@ -276,7 +344,7 @@ def timeseries(
 
 @router.get("/message-details")
 def message_details(
-    db: DbSession, _: CurrentUserDep,
+    db: DbSession, user: CurrentUserDep,
     from_date: str | None = Query(None, alias="from"),
     to_date: str | None = Query(None, alias="to"),
     status: str | None = None,
@@ -285,6 +353,9 @@ def message_details(
     limit: int = 100, offset: int = 0,
 ) -> list[dict]:
     stmt = select(MessageRecord).order_by(MessageRecord.id.desc())
+    acc_ids = _scoped_account_ids(db, user)
+    if acc_ids is not None:
+        stmt = stmt.where(MessageRecord.account_id.in_(acc_ids or [-1]))
     if status:
         stmt = stmt.where(MessageRecord.status == status)
     if task_id:
@@ -308,14 +379,14 @@ def _timeseries_rows(buckets):
 
 @router.get("/timeseries.csv")
 def export_timeseries(
-    db: DbSession, _: CurrentUserDep,
+    db: DbSession, user: CurrentUserDep,
     from_date: str | None = Query(None, alias="from"),
     to_date: str | None = Query(None, alias="to"),
     bucket: str = "day",
 ) -> StreamingResponse:
     """CSV equivalent of /api/statistics/timeseries — same buckets, no
     totals (totals are easy to compute downstream)."""
-    data = timeseries(db, _, from_date=from_date, to_date=to_date, bucket=bucket)
+    data = timeseries(db, user, from_date=from_date, to_date=to_date, bucket=bucket)
     return StreamingResponse(
         to_csv_stream(_timeseries_rows(data["buckets"])),
         media_type="text/csv; charset=utf-8",
