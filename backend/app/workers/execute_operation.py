@@ -141,7 +141,10 @@ def execute_operation_campaign(campaign_id: int) -> dict:
         if failed_count == 0:
             campaign.status = "completed"
         elif ok_count == 0:
-            campaign.status = "partially_failed"
+            # Every account failed — flag the whole campaign as failed so
+            # operators don't have to drill into per-account audits to see
+            # nothing succeeded.
+            campaign.status = "failed"
         else:
             campaign.status = "partially_failed"
 

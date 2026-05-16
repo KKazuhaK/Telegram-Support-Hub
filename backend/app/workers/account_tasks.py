@@ -156,9 +156,12 @@ def _parse_iso(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        dt = datetime.fromisoformat(value)
     except ValueError:
         return None
+    # Treat naive ISO timestamps as UTC to avoid `can't compare
+    # offset-naive and offset-aware datetimes` against `datetime.now(UTC)`.
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 @celery_app.task(name="backend.app.workers.account_tasks.reset_merchant_ports")

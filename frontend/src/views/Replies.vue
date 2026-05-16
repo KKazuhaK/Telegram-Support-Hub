@@ -33,7 +33,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import http from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 
@@ -94,11 +94,32 @@ function connect() {
   }
 }
 
+function tearDownWs() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+  try {
+    if (ws) {
+      ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null
+      ws.close()
+    }
+  } catch (_) {}
+  ws = null
+}
+
+// If the user logs out + back in as a different user the auth.token
+// changes mid-mount. Without this watcher the old socket keeps streaming
+// events for the previous user (or to the previous user's view).
+watch(() => auth.token, (newToken, oldToken) => {
+  if (newToken === oldToken) return
+  tearDownWs()
+  reconnectAttempt = 0
+  stopped = !newToken
+  if (newToken) connect()
+})
+
 onMounted(() => { load(); connect() })
 onBeforeUnmount(() => {
   stopped = true
-  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
-  try { ws && ws.close() } catch (_) {}
+  tearDownWs()
 })
 </script>
 

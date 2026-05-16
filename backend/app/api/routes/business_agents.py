@@ -45,12 +45,22 @@ def _public(row: BusinessAgent) -> dict:
 @router.get("")
 def list_agents(
     db: DbSession,
-    _: CurrentUserDep,
+    user: CurrentUserDep,
     q: str | None = None,
     status: bool | None = None,
     online_status: str | None = None,
 ) -> list[dict]:
     stmt = select(BusinessAgent).order_by(BusinessAgent.id.desc())
+
+    # Tenant scope:
+    # - support_agent: all (admin tool)
+    # - business_agent: only itself
+    # - merchant: empty (no business listing other resellers)
+    if user.actor_kind == "business_agent":
+        stmt = stmt.where(BusinessAgent.id == user.actor_id)
+    elif user.actor_kind == "merchant":
+        stmt = stmt.where(BusinessAgent.id == -1)
+
     if q:
         like = f"%{q}%"
         stmt = stmt.where((BusinessAgent.name.like(like)) | (BusinessAgent.nickname.like(like)))

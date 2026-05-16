@@ -10,7 +10,7 @@ from backend.app.services.audit import write_audit
 from backend.app.services.parsers import parse_customer_text
 from backend.app.services.permissions import permission_denied_detail
 from backend.app.services.serializers import list_dict, to_dict
-from backend.app.services.tenant_scope import apply_merchant_scope
+from backend.app.services.tenant_scope import apply_merchant_scope, can_access_row
 
 router = APIRouter()
 
@@ -125,10 +125,13 @@ def import_customers(payload: CustomerImport, db: DbSession, user: CurrentUserDe
 def update_customer(
     customer_id: int, payload: CustomerUpdate, db: DbSession, user: CurrentUserDep,
 ) -> dict:
-    if not (user.is_admin or user.can("can_broadcast")):
+    if not (user.is_admin or user.can("can_broadcast")
+            or user.actor_kind in ("business_agent", "merchant")):
         raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
     row = db.get(Customer, customer_id)
-    if not row:
+    if not row or not can_access_row(user, db, row):
+        # Return 404 (not 403) so the existence of the row is not leaked
+        # to a tenant that shouldn't see it.
         raise HTTPException(status_code=404, detail="客户不存在")
     values = payload.model_dump(exclude_unset=True)
     for key, value in values.items():
@@ -142,10 +145,11 @@ def update_customer(
 
 @router.delete("/{customer_id}")
 def delete_customer(customer_id: int, db: DbSession, user: CurrentUserDep) -> dict:
-    if not (user.is_admin or user.can("can_broadcast")):
+    if not (user.is_admin or user.can("can_broadcast")
+            or user.actor_kind in ("business_agent", "merchant")):
         raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
     row = db.get(Customer, customer_id)
-    if not row:
+    if not row or not can_access_row(user, db, row):
         raise HTTPException(status_code=404, detail="客户不存在")
     db.delete(row)
     write_audit(db, actor=user, action="customer.delete",

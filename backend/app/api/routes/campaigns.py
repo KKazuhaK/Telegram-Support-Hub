@@ -16,6 +16,7 @@ from backend.app.services.permissions import permission_denied_detail
 from backend.app.services.serializers import list_dict, to_dict
 from backend.app.services.template_engine import render_message
 from backend.app.services.template_renderer import render_template
+from backend.app.services.tenant_scope import apply_merchant_scope, can_access_row
 
 router = APIRouter()
 
@@ -160,6 +161,7 @@ def list_campaigns(
     limit: int = 100, offset: int = 0,
 ) -> list[dict]:
     stmt = select(Campaign).order_by(Campaign.id.desc())
+    stmt = apply_merchant_scope(stmt, user, db, Campaign)
     if task_kind:
         stmt = stmt.where(Campaign.task_kind == task_kind)
     return list_dict(list(db.scalars(stmt.offset(offset).limit(limit))))
@@ -279,9 +281,13 @@ def create_campaign(payload: CampaignCreate, db: DbSession, user: CurrentUserDep
 
 def _get_campaign_with_perm(db: DbSession, user, campaign_id: int) -> Campaign:
     campaign = db.get(Campaign, campaign_id)
-    if not campaign:
+    # Hide cross-tenant rows behind 404 to avoid leaking their existence
+    # to a tenant that isn't supposed to see them. Check *before* the
+    # permission gate so an attacker can't probe campaign ids by toggling
+    # role flags either.
+    if not campaign or not can_access_row(user, db, campaign):
         raise HTTPException(status_code=404, detail="群发任务不存在")
-    if not user.is_admin:
+    if user.actor_kind == "support_agent" and not user.is_admin:
         if not (user.can("can_broadcast") or user.can("can_send_message")):
             raise HTTPException(
                 status_code=403,

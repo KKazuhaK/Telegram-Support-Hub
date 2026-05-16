@@ -6,6 +6,7 @@ from backend.app.api.deps import AdminDep, CurrentUserDep, DbSession
 from backend.app.models.account import Account, AccountGroup, AccountGroupMember
 from backend.app.services.audit import write_audit
 from backend.app.services.serializers import list_dict, to_dict
+from backend.app.services.tenant_scope import apply_merchant_scope
 
 router = APIRouter()
 
@@ -32,7 +33,10 @@ class AccountGroupMemberCreate(BaseModel):
 @router.get("")
 def list_groups(db: DbSession, user: CurrentUserDep) -> list[dict]:
     stmt = select(AccountGroup).order_by(AccountGroup.id.desc())
-    if not user.is_admin:
+    # Tenant scope first (merchant_id filter for merchant/business_agent).
+    stmt = apply_merchant_scope(stmt, user, db, AccountGroup)
+    # Support-agent (non-admin) is further constrained by per-group perms.
+    if user.actor_kind == "support_agent" and not user.is_admin:
         stmt = stmt.where(AccountGroup.id.in_(user.visible_group_ids() or [-1]))
     return list_dict(list(db.scalars(stmt)))
 

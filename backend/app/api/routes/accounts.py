@@ -267,12 +267,17 @@ def batch_update_accounts(payload: AccountBatch, db: DbSession, admin: AdminDep)
             "move_to_group_id": payload.move_to_group_id,
         },
     )
+    # Sync ports_used for any merchant whose active count just changed
+    # *inside* the same transaction so audit + status + ports_used commit
+    # atomically (one of them failing rolls back the others). Flush first
+    # so the recompute SELECT sees the just-mutated account.status values
+    # — the session runs with autoflush=False.
+    if affected_merchants:
+        db.flush()
+        for merchant_id in affected_merchants:
+            recompute_merchant_ports(db, merchant_id)
+
     db.commit()
-
-    # Sync ports_used for any merchant whose active count just changed.
-    for merchant_id in affected_merchants:
-        recompute_merchant_ports(db, merchant_id)
-
     return {"updated": len(rows)}
 
 

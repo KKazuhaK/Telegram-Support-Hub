@@ -37,13 +37,26 @@ def _count_active(db: Session, merchant_id: int) -> int:
     return int(n or 0)
 
 
+def _as_aware(dt: datetime) -> datetime:
+    """Treat naive datetimes as UTC. Stored ISO strings come from
+    `datetime.now(UTC).isoformat()` so they include a tz suffix — but
+    legacy rows or hand-edited DBs may have naive values; comparing aware
+    vs naive raises TypeError, so we normalize here."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 def recompute_merchant_ports(db: Session, merchant_id: int) -> int:
-    """Set `ports_used` to the live active-account count and return it."""
+    """Set `ports_used` to the live active-account count and return it.
+
+    Note: this used to call `db.commit()` itself, which would prematurely
+    persist any pending writes the caller still had open. It now only
+    mutates the row; the caller is responsible for committing.
+    """
     used = _count_active(db, merchant_id)
     m = db.get(Merchant, merchant_id)
     if m is not None:
         m.ports_used = used
-        db.commit()
+        db.flush()
     return used
 
 
@@ -52,16 +65,27 @@ def check_quota_for_activation(
 ) -> None:
     """Raise QuotaError if activating `additional` more accounts would
     exceed the merchant's quota or fall past expiry. No-op when
-    merchant_id is None (admin-managed accounts)."""
+    merchant_id is None (admin-managed accounts).
+
+    Uses `SELECT ... FOR UPDATE` on the merchant row so two concurrent
+    activations against the same merchant can't both pass the check and
+    overshoot `ports_total`. On SQLite (tests) the row-lock is a no-op,
+    which matches its single-writer model anyway.
+    """
     if not merchant_id:
         return
-    m = db.get(Merchant, merchant_id)
+
+    # Take a row lock on the merchant before reading active-count. Caller
+    # holds an open transaction; commit/rollback releases it.
+    m = db.scalar(
+        select(Merchant).where(Merchant.id == merchant_id).with_for_update()
+    )
     if m is None:
         return
 
     if m.ports_expires_at:
         try:
-            expires = datetime.fromisoformat(m.ports_expires_at)
+            expires = _as_aware(datetime.fromisoformat(m.ports_expires_at))
         except ValueError:
             expires = None
         if expires is not None and expires < datetime.now(UTC):

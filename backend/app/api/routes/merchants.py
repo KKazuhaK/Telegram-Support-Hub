@@ -63,13 +63,23 @@ def _public(row: Merchant) -> dict:
 @router.get("")
 def list_merchants(
     db: DbSession,
-    _: CurrentUserDep,
+    user: CurrentUserDep,
     business_agent_id: int | None = None,
     q: str | None = None,
     status: bool | None = None,
     online_status: str | None = None,
 ) -> list[dict]:
     stmt = select(Merchant).order_by(Merchant.id.desc())
+
+    # Tenant scope:
+    # - support_agent: unrestricted (admin tool)
+    # - business_agent: only merchants this BA owns
+    # - merchant: only itself
+    if user.actor_kind == "merchant":
+        stmt = stmt.where(Merchant.id == user.actor_id)
+    elif user.actor_kind == "business_agent":
+        stmt = stmt.where(Merchant.business_agent_id == user.actor_id)
+
     if business_agent_id is not None:
         stmt = stmt.where(Merchant.business_agent_id == business_agent_id)
     if q:
