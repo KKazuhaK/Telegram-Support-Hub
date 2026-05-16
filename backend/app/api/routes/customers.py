@@ -303,9 +303,13 @@ def send_customer_message(
     proxy = db.get(ProxyEndpoint, account.proxy_id) if account.proxy_id else None
     adapter = adapter_module.get_adapter()
 
+    # Adapter wants a single `target` string (phone or username); it
+    # calls resolve_target() internally to look up the Telegram entity.
+    # Pass account positionally to avoid kwarg-vs-bound-self collision
+    # when tests substitute a stub class attribute.
     try:
         result = asyncio.run(adapter.send_message(
-            account, phone=cust.phone, text=text, proxy=proxy,
+            account, cust.phone, text, proxy=proxy,
         ))
     except Exception as exc:  # noqa: BLE001 — surface to operator below
         record.status = "failed"

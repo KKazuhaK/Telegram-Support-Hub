@@ -154,8 +154,9 @@
         <template #default="{ row }">{{ row.proxy_id || '未绑定' }}</template>
       </el-table-column>
       <el-table-column prop="last_login_at" label="最近登录" width="170" />
-      <el-table-column label="操作" width="180" v-if="auth.isAdmin">
+      <el-table-column label="操作" width="240" v-if="auth.isAdmin">
         <template #default="{ row }">
+          <el-button size="small" link @click="openTestSend(row)">测试发送</el-button>
           <el-button size="small" link @click="autoBindProxy(row)">自动代理</el-button>
           <el-popconfirm title="确认解绑代理？" @confirm="unbindProxy(row)">
             <template #reference>
@@ -166,6 +167,40 @@
       </el-table-column>
     </el-table>
   </el-card>
+
+  <!-- Admin-only single-shot test send. Used to verify a TG account can
+       actually reach a target without setting up a campaign. -->
+  <el-dialog v-model="testSendDialog" title="测试发送" width="520px">
+    <el-form label-position="top" :model="testForm">
+      <el-form-item label="使用账号">
+        <el-input :value="testForm.account_label" disabled />
+      </el-form-item>
+      <el-form-item label="目标类型">
+        <el-radio-group v-model="testForm.target_kind">
+          <el-radio-button value="phone">手机号</el-radio-button>
+          <el-radio-button value="tg_user_id">TG ID / 用户名</el-radio-button>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item :label="testForm.target_kind === 'phone' ? '手机号（含国家码）' : 'TG 数字 ID 或 @username'">
+        <el-input
+          v-model="testForm.target"
+          :placeholder="testForm.target_kind === 'phone' ? '+12025550100' : '123456789 或 @somebody'"
+        />
+      </el-form-item>
+      <el-form-item label="消息内容">
+        <el-input v-model="testForm.text" type="textarea" :rows="4" placeholder="测试消息内容…" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="testSendDialog = false">取消</el-button>
+      <el-button
+        type="primary"
+        :loading="testSending"
+        :disabled="!testForm.target.trim() || !testForm.text.trim()"
+        @click="submitTestSend"
+      >发送</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -380,6 +415,46 @@ async function autoBindProxy(row) {
 async function unbindProxy(row) {
   await http.delete(`/accounts/${row.id}/proxy`)
   await load()
+}
+
+// --- test send (admin smoke test) ---
+const testSendDialog = ref(false)
+const testSending = ref(false)
+const testForm = reactive({
+  account_id: null,
+  account_label: '',
+  target: '',
+  target_kind: 'phone',
+  text: '',
+})
+
+function openTestSend(row) {
+  testForm.account_id = row.id
+  testForm.account_label = `#${row.id} ${row.phone || row.tg_user_id} (${row.status || ''})`
+  testForm.target = ''
+  testForm.target_kind = 'phone'
+  testForm.text = '这是一条测试消息'
+  testSendDialog.value = true
+}
+
+async function submitTestSend() {
+  testSending.value = true
+  try {
+    const { data } = await http.post(
+      `/accounts/${testForm.account_id}/test-send`,
+      {
+        target: testForm.target.trim(),
+        target_kind: testForm.target_kind,
+        text: testForm.text,
+      },
+    )
+    ElMessage.success(`发送成功！消息 ID: ${data.external_message_id || data.id}`)
+    testSendDialog.value = false
+  } catch (_) {
+    // http.js already surfaced the friendly error toast (502 etc.).
+  } finally {
+    testSending.value = false
+  }
 }
 
 onMounted(load)

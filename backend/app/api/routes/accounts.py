@@ -1,6 +1,8 @@
+import asyncio
 import json
 import re
 import zipfile
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -11,7 +13,8 @@ from sqlalchemy import delete as sa_delete, select
 from backend.app.api.deps import AdminDep, CurrentUserDep, DbSession
 from backend.app.core.config import settings
 from backend.app.models.account import Account, AccountGroup, AccountGroupMember
-from backend.app.models.proxy import AccountProxyLog
+from backend.app.models.message import MessageRecord
+from backend.app.models.proxy import AccountProxyLog, ProxyEndpoint
 from backend.app.services.audit import write_audit
 from backend.app.services.port_quota import (
     QuotaError, check_quota_for_activation, recompute_merchant_ports,
@@ -485,6 +488,105 @@ def auto_bind_proxy(account_id: int, db: DbSession, admin: AdminDep, prefer_coun
     db.commit()
     db.refresh(account)
     return to_dict(account)
+
+
+class TestSendPayload(BaseModel):
+    target: str = Field(min_length=1, max_length=64)
+    text: str = Field(min_length=1, max_length=4000)
+    # 'phone' (E.164-ish, defaults to phone when omitted because most
+    # ad-hoc test targets are phone numbers) or 'tg_user_id'.
+    target_kind: str = "phone"
+
+
+@router.post("/{account_id}/test-send")
+def test_send(
+    account_id: int, payload: TestSendPayload,
+    db: DbSession, admin: AdminDep,
+) -> dict:
+    """Admin smoke-test: send a single message via this TG account to an
+    arbitrary phone / tg_user_id without going through campaigns.
+
+    Persists a MessageRecord (campaign_id=None, direction='outbound')
+    so the operator can see the attempt + its result in chat history
+    and audit logs.
+    """
+    account = db.get(Account, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="TG 账号不存在")
+    if account.status != "active" or not account.enabled:
+        raise HTTPException(
+            status_code=400,
+            detail=f"TG 账号未启用或不在线（status={account.status}, enabled={account.enabled}）",
+        )
+    if payload.target_kind not in ("phone", "tg_user_id"):
+        raise HTTPException(
+            status_code=400,
+            detail="target_kind 必须是 'phone' 或 'tg_user_id'",
+        )
+
+    target_phone = payload.target if payload.target_kind == "phone" else None
+    target_uid = payload.target if payload.target_kind == "tg_user_id" else None
+
+    proxy = db.get(ProxyEndpoint, account.proxy_id) if account.proxy_id else None
+
+    record = MessageRecord(
+        account_id=account.id,
+        phone=target_phone,
+        target_tg_user_id=target_uid,
+        body_snapshot=payload.text,
+        direction="outbound",
+        status="sending",
+    )
+    record.created_at = datetime.now(UTC)
+    db.add(record)
+    db.flush()
+
+    # Late import so the adapter (and patched get_adapter in tests) is
+    # resolved at call time.
+    from backend.app.telegram import adapter as adapter_module
+    adapter = adapter_module.get_adapter()
+
+    # Adapter resolves the target string to a Telegram entity via
+    # client.get_entity — accepts phone or @username or numeric id.
+    # Pass positionally to dodge the bound-method-vs-kwarg collision
+    # when tests substitute a stub class attribute.
+    try:
+        result = asyncio.run(adapter.send_message(
+            account, payload.target, payload.text, proxy=proxy,
+        ))
+    except Exception as exc:  # noqa: BLE001 — surface to admin below
+        record.status = "failed"
+        record.error_code = type(exc).__name__
+        record.error_message = str(exc)[:500]
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"Telegram 发送失败：{exc}") from exc
+
+    if result.ok:
+        record.status = "sent"
+        record.sent_at = datetime.now(UTC).isoformat()
+        record.external_message_id = result.external_message_id
+        if result.target_tg_user_id:
+            record.target_tg_user_id = result.target_tg_user_id
+    else:
+        record.status = "failed"
+        record.error_code = result.error_code
+        record.error_message = (result.error_message or "")[:500]
+
+    write_audit(
+        db, actor=admin, action="account.test_send",
+        target_type="account", target_id=account.id,
+        detail={"target": payload.target, "kind": payload.target_kind,
+                "ok": result.ok, "error_code": result.error_code},
+    )
+    db.commit()
+    db.refresh(record)
+
+    if not result.ok:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Telegram 发送失败：{result.error_message or result.error_code}",
+        )
+    return to_dict(record)
 
 
 @router.delete("/{account_id}/proxy")

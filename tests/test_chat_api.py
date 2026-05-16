@@ -74,12 +74,12 @@ class CustomerChatTestCase(unittest.TestCase):
         self.db.close()
 
     def _stubbed_send(self, *, ok=True, error_message=None):
-        async def fake(account, target_tg_user_id=None, phone=None,
-                       text=None, entities=None, proxy=None):
+        # Match adapter.send_message(account, target, body, proxy=, entities=).
+        async def fake(account, target, body, proxy=None, entities=None):
             return TelegramSendResult(
                 ok=ok,
                 external_message_id="msg-42" if ok else None,
-                target_tg_user_id=str(target_tg_user_id or 999) if ok else None,
+                target_tg_user_id="999" if ok else None,
                 error_code=None if ok else "rpc_error",
                 error_message=error_message,
             )
@@ -91,7 +91,9 @@ class CustomerChatTestCase(unittest.TestCase):
         with patch.object(adapter_module, "get_adapter") as get_adapter_mock:
             stub = type("Stub", (), {
                 "configured": True,
-                "send_message": self._stubbed_send(),
+                # staticmethod so Python doesn't auto-bind `self` to the
+                # stub instance when the route calls adapter.send_message().
+                "send_message": staticmethod(self._stubbed_send()),
             })()
             get_adapter_mock.return_value = stub
 
@@ -119,7 +121,7 @@ class CustomerChatTestCase(unittest.TestCase):
         with patch.object(adapter_module, "get_adapter") as get_adapter_mock:
             stub = type("Stub", (), {
                 "configured": True,
-                "send_message": self._stubbed_send(ok=False, error_message="boom"),
+                "send_message": staticmethod(self._stubbed_send(ok=False, error_message="boom")),
             })()
             get_adapter_mock.return_value = stub
 
@@ -203,7 +205,7 @@ class CustomerChatTestCase(unittest.TestCase):
                           return_value=("Hello Alice", "zh-CN")):
             stub = type("Stub", (), {
                 "configured": True,
-                "send_message": self._stubbed_send(),
+                "send_message": staticmethod(self._stubbed_send()),
             })()
             get_adapter_mock.return_value = stub
 
