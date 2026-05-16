@@ -60,7 +60,13 @@
           <el-option label="agent" value="agent" />
         </el-select>
       </el-form-item>
-      <el-form-item label="密码"><el-input v-model="form.password" type="password" :placeholder="form.id ? '留空则不修改' : ''" /></el-form-item>
+      <el-form-item label="密码">
+        <el-input
+          v-model="form.password"
+          type="password"
+          :placeholder="form.id ? '留空则不修改' : '至少 8 位'"
+        />
+      </el-form-item>
       <el-form-item label="状态" v-if="form.id"><el-select v-model="form.status"><el-option label="启用" value="enabled" /><el-option label="禁用" value="disabled" /></el-select></el-form-item>
     </el-form>
     <template #footer>
@@ -179,6 +185,21 @@ function openDialog(row = null) {
 }
 
 async function save() {
+  // Catch the most common front-line validation errors before the round
+  // trip so the user sees a Chinese message in context instead of the
+  // raw Pydantic English popup.
+  if (!form.id && !form.username) {
+    ElMessage.warning('请填写用户名')
+    return
+  }
+  if (!form.id && (!form.password || form.password.length < 8)) {
+    ElMessage.warning('密码至少 8 位')
+    return
+  }
+  if (form.id && form.password && form.password.length < 8) {
+    ElMessage.warning('修改密码时新密码至少 8 位（留空表示不修改）')
+    return
+  }
   if (form.id) {
     const payload = { nickname: form.nickname, role: form.role, status: form.status }
     if (form.password) payload.password = form.password
