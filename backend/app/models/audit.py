@@ -12,6 +12,12 @@ class AuditLog(Base, TimestampMixin):
     actor_id: Mapped[int | None] = mapped_column(Integer, index=True)
     actor_username: Mapped[str | None] = mapped_column(String(120), index=True)
     actor_role: Mapped[str | None] = mapped_column(String(32))
+    # `actor_id` is ambiguous between SupportAgent / BusinessAgent / Merchant
+    # primary keys (all start at 1). actor_kind disambiguates so a tenant-
+    # scoped audit view can filter by (actor_kind, actor_id) without
+    # accidentally surfacing rows from another actor table that happen to
+    # share an id value.
+    actor_kind: Mapped[str | None] = mapped_column(String(32), index=True)
     action: Mapped[str] = mapped_column(String(80), index=True)
     target_type: Mapped[str | None] = mapped_column(String(60), index=True)
     target_id: Mapped[str | None] = mapped_column(String(60), index=True)

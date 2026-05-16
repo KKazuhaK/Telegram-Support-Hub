@@ -10,6 +10,9 @@ from backend.app.core.config import settings
 from backend.app.models.data_groups import Material, MaterialGroup
 from backend.app.services.audit import write_audit
 from backend.app.services.serializers import to_dict
+from backend.app.services.tenant_scope import (
+    apply_merchant_scope, can_access_row, default_merchant_id,
+)
 
 router = APIRouter()
 
@@ -32,8 +35,9 @@ class MaterialsAdd(BaseModel):
 
 
 @router.get("")
-def list_groups(db: DbSession, _: CurrentUserDep, kind: str | None = None) -> list[dict]:
+def list_groups(db: DbSession, user: CurrentUserDep, kind: str | None = None) -> list[dict]:
     stmt = select(MaterialGroup).order_by(MaterialGroup.id.desc())
+    stmt = apply_merchant_scope(stmt, user, db, MaterialGroup)
     if kind:
         stmt = stmt.where(MaterialGroup.kind == kind)
     rows = list(db.scalars(stmt))

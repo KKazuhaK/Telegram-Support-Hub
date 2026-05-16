@@ -8,6 +8,9 @@ from backend.app.services.audit import write_audit
 from backend.app.services.permissions import permission_denied_detail
 from backend.app.services.serializers import list_dict, to_dict
 from backend.app.services.template_engine import render_message
+from backend.app.services.tenant_scope import (
+    apply_merchant_scope, can_access_row, can_write_tenant_data, default_merchant_id,
+)
 
 router = APIRouter()
 
@@ -38,15 +41,19 @@ def preview_template(payload: TemplatePreview, _: CurrentUserDep) -> dict:
 
 
 @router.get("")
-def list_templates(db: DbSession, _: CurrentUserDep) -> list[dict]:
-    return list_dict(list(db.scalars(select(MessageTemplate).order_by(MessageTemplate.id.desc()))))
+def list_templates(db: DbSession, user: CurrentUserDep) -> list[dict]:
+    stmt = select(MessageTemplate).order_by(MessageTemplate.id.desc())
+    stmt = apply_merchant_scope(stmt, user, db, MessageTemplate)
+    return list_dict(list(db.scalars(stmt)))
 
 
 @router.post("")
 def create_template(payload: TemplateCreate, db: DbSession, user: CurrentUserDep) -> dict:
-    if not (user.is_admin or user.can("can_broadcast")):
+    if not can_write_tenant_data(user):
         raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
-    template = MessageTemplate(name=payload.name, body=payload.body, created_by=user.username)
+    template = MessageTemplate(name=payload.name, body=payload.body,
+                               created_by=user.username,
+                               merchant_id=default_merchant_id(user))
     db.add(template)
     db.flush()
     write_audit(db, actor=user, action="template.create", target_type="message_template",
@@ -58,10 +65,10 @@ def create_template(payload: TemplateCreate, db: DbSession, user: CurrentUserDep
 
 @router.patch("/{template_id}")
 def update_template(template_id: int, payload: TemplateUpdate, db: DbSession, user: CurrentUserDep) -> dict:
-    if not (user.is_admin or user.can("can_broadcast")):
+    if not can_write_tenant_data(user):
         raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
     template = db.get(MessageTemplate, template_id)
-    if not template:
+    if not template or not can_access_row(user, db, template):
         raise HTTPException(status_code=404, detail="模板不存在")
     values = payload.model_dump(exclude_unset=True)
     for key, value in values.items():

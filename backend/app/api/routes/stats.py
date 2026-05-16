@@ -141,12 +141,38 @@ def per_account_stats(db: DbSession, user: CurrentUserDep) -> list[dict]:
     stmt = select(Account).order_by(Account.id.asc())
     stmt = apply_merchant_scope(stmt, user, db, Account)
     rows = list(db.scalars(stmt))
+    acc_ids = [a.id for a in rows]
+
+    # Bulk per-account aggregates: 3 queries instead of 3 × N accounts.
+    sent_by, replied_by, failed_by = {}, {}, {}
+    if acc_ids:
+        for r in db.execute(
+            select(MessageRecord.account_id, func.count())
+            .where(MessageRecord.account_id.in_(acc_ids))
+            .where(MessageRecord.status == "sent")
+            .group_by(MessageRecord.account_id)
+        ).all():
+            sent_by[r[0]] = int(r[1])
+        for r in db.execute(
+            select(MessageRecord.account_id, func.count())
+            .where(MessageRecord.account_id.in_(acc_ids))
+            .where(MessageRecord.status == "replied")
+            .group_by(MessageRecord.account_id)
+        ).all():
+            replied_by[r[0]] = int(r[1])
+        for r in db.execute(
+            select(MessageRecord.account_id, func.count())
+            .where(MessageRecord.account_id.in_(acc_ids))
+            .where(MessageRecord.status.in_(["failed", "failed_permanent"]))
+            .group_by(MessageRecord.account_id)
+        ).all():
+            failed_by[r[0]] = int(r[1])
+
     out = []
     for acc in rows:
-        sent = count(db, MessageRecord, MessageRecord.account_id == acc.id, MessageRecord.status == "sent")
-        replied = count(db, MessageRecord, MessageRecord.account_id == acc.id, MessageRecord.status == "replied")
-        failed = count(db, MessageRecord, MessageRecord.account_id == acc.id,
-                       MessageRecord.status.in_(["failed", "failed_permanent"]))
+        sent = sent_by.get(acc.id, 0)
+        replied = replied_by.get(acc.id, 0)
+        failed = failed_by.get(acc.id, 0)
         out.append({
             "account_id": acc.id,
             "tg_user_id": acc.tg_user_id,
@@ -170,20 +196,47 @@ def per_group_stats(db: DbSession, user: CurrentUserDep) -> list[dict]:
     stmt = select(AccountGroup).order_by(AccountGroup.id.asc())
     stmt = apply_merchant_scope(stmt, user, db, AccountGroup)
     groups = list(db.scalars(stmt))
+
+    # Pre-load (group_id -> [account_ids]) in one query.
+    group_to_accounts: dict[int, list[int]] = {}
+    for row in db.execute(
+        select(AccountGroupMember.group_id, AccountGroupMember.account_id)
+    ).all():
+        group_to_accounts.setdefault(row[0], []).append(row[1])
+
+    # And pre-aggregate message counts per account in 3 queries total.
+    all_account_ids = {aid for ids in group_to_accounts.values() for aid in ids}
+    sent_by_acc: dict[int, int] = {}
+    replied_by_acc: dict[int, int] = {}
+    failed_by_acc: dict[int, int] = {}
+    if all_account_ids:
+        for row in db.execute(
+            select(MessageRecord.account_id, func.count())
+            .where(MessageRecord.account_id.in_(all_account_ids))
+            .where(MessageRecord.status == "sent")
+            .group_by(MessageRecord.account_id)
+        ).all():
+            sent_by_acc[row[0]] = int(row[1])
+        for row in db.execute(
+            select(MessageRecord.account_id, func.count())
+            .where(MessageRecord.account_id.in_(all_account_ids))
+            .where(MessageRecord.status == "replied")
+            .group_by(MessageRecord.account_id)
+        ).all():
+            replied_by_acc[row[0]] = int(row[1])
+        for row in db.execute(
+            select(MessageRecord.account_id, func.count())
+            .where(MessageRecord.account_id.in_(all_account_ids))
+            .where(MessageRecord.status.in_(["failed", "failed_permanent"]))
+            .group_by(MessageRecord.account_id)
+        ).all():
+            failed_by_acc[row[0]] = int(row[1])
     out = []
     for g in groups:
-        member_ids = [m.account_id for m in db.scalars(
-            select(AccountGroupMember).where(AccountGroupMember.group_id == g.id)
-        )]
-        if member_ids:
-            sent = count(db, MessageRecord, MessageRecord.account_id.in_(member_ids),
-                         MessageRecord.status == "sent")
-            replied = count(db, MessageRecord, MessageRecord.account_id.in_(member_ids),
-                            MessageRecord.status == "replied")
-            failed = count(db, MessageRecord, MessageRecord.account_id.in_(member_ids),
-                           MessageRecord.status.in_(["failed", "failed_permanent"]))
-        else:
-            sent = replied = failed = 0
+        member_ids = group_to_accounts.get(g.id, [])
+        sent = sum(sent_by_acc.get(a, 0) for a in member_ids)
+        replied = sum(replied_by_acc.get(a, 0) for a in member_ids)
+        failed = sum(failed_by_acc.get(a, 0) for a in member_ids)
         out.append({
             "group_id": g.id,
             "name": g.name,
@@ -208,38 +261,52 @@ def per_agent_stats(db: DbSession, _: CurrentUserDep) -> list[dict]:
 
     # Pre-load (agent_id, account_ids) so we don't issue 1+N queries.
     perm_rows = list(db.scalars(select(SupportAgentGroupPermission)))
+    # Single query for all (group, account_id) pairs — beats one-SELECT-per-group.
     group_to_accounts: dict[int, list[int]] = {}
-    for gid, in db.execute(select(AccountGroupMember.group_id).distinct()).all():
-        group_to_accounts[gid] = [m.account_id for m in db.scalars(
-            select(AccountGroupMember).where(AccountGroupMember.group_id == gid)
-        )]
+    for row in db.execute(
+        select(AccountGroupMember.group_id, AccountGroupMember.account_id)
+    ).all():
+        group_to_accounts.setdefault(row[0], []).append(row[1])
     agent_accounts: dict[int, set[int]] = {}
     for p in perm_rows:
         bucket = agent_accounts.setdefault(p.agent_id, set())
         bucket.update(group_to_accounts.get(p.account_group_id, []))
 
+    # Bulk per-account aggregation: 3 queries total instead of 3 × N agents.
+    relevant_acc_ids = {aid for ids in agent_accounts.values() for aid in ids}
+    sent_by_acc: dict[int, int] = {}
+    replied_by_acc: dict[int, int] = {}
+    read_by_acc: dict[int, int] = {}
+    if relevant_acc_ids:
+        for row in db.execute(
+            select(MessageRecord.account_id, func.count())
+            .where(MessageRecord.account_id.in_(relevant_acc_ids))
+            .where(MessageRecord.sent_at.like(f"{today_prefix}%"))
+            .group_by(MessageRecord.account_id)
+        ).all():
+            sent_by_acc[row[0]] = int(row[1])
+        for row in db.execute(
+            select(MessageRecord.account_id, func.count())
+            .where(MessageRecord.account_id.in_(relevant_acc_ids))
+            .where(MessageRecord.replied_at.like(f"{today_prefix}%"))
+            .group_by(MessageRecord.account_id)
+        ).all():
+            replied_by_acc[row[0]] = int(row[1])
+        for row in db.execute(
+            select(MessageRecord.account_id, func.count())
+            .where(MessageRecord.account_id.in_(relevant_acc_ids))
+            .where(MessageRecord.read_at.like(f"{today_prefix}%"))
+            .group_by(MessageRecord.account_id)
+        ).all():
+            read_by_acc[row[0]] = int(row[1])
+
     out = []
     for agent in agents:
         recent_login = agent.last_login_at and agent.last_login_at >= seven_days_ago
         acc_ids = agent_accounts.get(agent.id, set())
-        if acc_ids:
-            today_sent = count(
-                db, MessageRecord,
-                MessageRecord.account_id.in_(acc_ids),
-                MessageRecord.sent_at.like(f"{today_prefix}%"),
-            )
-            today_replied = count(
-                db, MessageRecord,
-                MessageRecord.account_id.in_(acc_ids),
-                MessageRecord.replied_at.like(f"{today_prefix}%"),
-            )
-            today_read = count(
-                db, MessageRecord,
-                MessageRecord.account_id.in_(acc_ids),
-                MessageRecord.read_at.like(f"{today_prefix}%"),
-            )
-        else:
-            today_sent = today_replied = today_read = 0
+        today_sent = sum(sent_by_acc.get(a, 0) for a in acc_ids)
+        today_replied = sum(replied_by_acc.get(a, 0) for a in acc_ids)
+        today_read = sum(read_by_acc.get(a, 0) for a in acc_ids)
         out.append({
             "agent_id": agent.id,
             "username": agent.username,

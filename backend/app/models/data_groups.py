@@ -9,12 +9,16 @@ class PhoneGroup(Base, TimestampMixin):
     __tablename__ = "phone_groups"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    # `name` is no longer globally unique — two merchants may both have a
+    # group called "EU"; uniqueness is enforced per-merchant at the app
+    # layer instead.
+    name: Mapped[str] = mapped_column(String(120), index=True)
     country: Mapped[str | None] = mapped_column(String(8), index=True)
     remark: Mapped[str | None] = mapped_column(Text)
     daily_limit: Mapped[int] = mapped_column(Integer, default=0)
     success_count: Mapped[int] = mapped_column(Integer, default=0)
     failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    merchant_id: Mapped[int | None] = mapped_column(ForeignKey("merchants.id"), index=True)
 
 
 class Phone(Base, TimestampMixin):
@@ -32,10 +36,12 @@ class MaterialGroup(Base, TimestampMixin):
     __tablename__ = "material_groups"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    # Per-merchant uniqueness; see PhoneGroup note above.
+    name: Mapped[str] = mapped_column(String(120), index=True)
     # 'text' | 'image' | 'voice'
     kind: Mapped[str] = mapped_column(String(32), default="text", index=True)
     remark: Mapped[str | None] = mapped_column(Text)
+    merchant_id: Mapped[int | None] = mapped_column(ForeignKey("merchants.id"), index=True)
 
 
 class Material(Base, TimestampMixin):

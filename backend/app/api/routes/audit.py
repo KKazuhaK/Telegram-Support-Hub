@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from sqlalchemy import or_, select
 
-from backend.app.api.deps import AdminDep, DbSession
+from backend.app.api.deps import CurrentUserDep, DbSession
 from backend.app.models.audit import AuditLog
 from backend.app.services.serializers import list_dict
 
@@ -13,7 +13,7 @@ router = APIRouter()
 @router.get("")
 def list_audit_logs(
     db: DbSession,
-    _: AdminDep,
+    user: CurrentUserDep,
     action: str | None = None,
     action_prefix: str | None = None,
     target_type: str | None = None,
@@ -27,8 +27,19 @@ def list_audit_logs(
     that also accepts pipe-separated alternatives so callers can ask for
     e.g. all import + export actions in one shot:
         action_prefix=customer.import|export.
+
+    Scoping:
+      - support_agent (admin / supervisor / agent): unrestricted
+      - merchant / business_agent: only rows authored by self
+        (filtered by actor_kind + actor_id to disambiguate id collisions
+        between actor tables).
     """
     stmt = select(AuditLog).order_by(AuditLog.id.desc())
+    if user.actor_kind != "support_agent":
+        stmt = stmt.where(
+            AuditLog.actor_kind == user.actor_kind,
+            AuditLog.actor_id == user.actor_id,
+        )
     if action:
         stmt = stmt.where(AuditLog.action == action)
     if action_prefix:

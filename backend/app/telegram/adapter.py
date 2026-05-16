@@ -52,6 +52,63 @@ class OperationResult:
     error_message: str | None = None
 
 
+def _classify_telethon_error(exc: BaseException) -> OperationResult:
+    """Map a raised Telethon (or other) exception to a stable error_code +
+    Chinese-friendly error_message. Stable codes let the worker decide
+    retry policy without scraping the message string and let operators
+    grep audit logs for a known set of failure classes.
+
+    Codes:
+      flood_wait        — FloodWaitError; transient, exposes seconds_to_wait
+      auth_invalid      — auth/session error (e.g. AuthKeyError)
+      password_invalid  — modify_password current_password wrong
+      network           — connection/timeout class
+      rpc_error         — generic Telethon RPCError that doesn't match above
+      unknown           — everything else
+    """
+    name = type(exc).__name__
+    msg = str(exc)
+
+    if telethon_errors is not None:
+        flood_cls = getattr(telethon_errors, "FloodWaitError", None)
+        if flood_cls is not None and isinstance(exc, flood_cls):
+            wait = getattr(exc, "seconds", None)
+            human = f"触发频率限制，请等待 {wait} 秒后重试" if wait else "触发 Telegram 频率限制"
+            return OperationResult(ok=False, error_code="flood_wait", error_message=human)
+
+        pw_cls = getattr(telethon_errors, "PasswordHashInvalidError", None)
+        if pw_cls is not None and isinstance(exc, pw_cls):
+            return OperationResult(
+                ok=False, error_code="password_invalid",
+                error_message="原 2FA 密码不正确",
+            )
+
+        auth_classes = tuple(
+            cls for cls in (
+                getattr(telethon_errors, "AuthKeyError", None),
+                getattr(telethon_errors, "AuthKeyDuplicatedError", None),
+                getattr(telethon_errors, "AuthKeyUnregisteredError", None),
+                getattr(telethon_errors, "UserDeactivatedError", None),
+                getattr(telethon_errors, "SessionPasswordNeededError", None),
+            ) if cls is not None
+        )
+        if auth_classes and isinstance(exc, auth_classes):
+            return OperationResult(
+                ok=False, error_code="auth_invalid",
+                error_message=f"账号会话失效：{msg or name}",
+            )
+
+        rpc_cls = getattr(telethon_errors, "RPCError", None)
+        if rpc_cls is not None and isinstance(exc, rpc_cls):
+            return OperationResult(ok=False, error_code="rpc_error", error_message=msg or name)
+
+    # Connection / OS errors look the same from Telethon's perspective.
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return OperationResult(ok=False, error_code="network", error_message=msg or name)
+
+    return OperationResult(ok=False, error_code=name, error_message=msg)
+
+
 def _proxy_to_telethon(proxy: ProxyEndpoint | None) -> tuple | None:
     if not proxy:
         return None
@@ -296,13 +353,13 @@ class TelegramAdapter:
         except Exception as exc:
             logger.exception("run_operation failed for account %s op %s",
                              account.id, operation)
-            return OperationResult(
-                ok=False, error_code=type(exc).__name__, error_message=str(exc),
-            )
+            return _classify_telethon_error(exc)
         finally:
             try:
                 await client.disconnect()
             except Exception:
+                # Cleanup-only path; intentionally swallowed so the caller
+                # still sees the original error_code, not a disconnect issue.
                 pass
 
     async def _dispatch_operation(self, client: Any, operation: str, params: dict) -> OperationResult:

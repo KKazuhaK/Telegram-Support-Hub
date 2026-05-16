@@ -9,6 +9,7 @@ from backend.app.models.data_groups import Phone, PhoneGroup
 from backend.app.services.audit import write_audit
 from backend.app.services.parsers import normalize_phone
 from backend.app.services.serializers import to_dict
+from backend.app.services.tenant_scope import apply_merchant_scope
 
 router = APIRouter()
 
@@ -32,8 +33,10 @@ class PhonesAdd(BaseModel):
 
 
 @router.get("")
-def list_phone_groups(db: DbSession, _: CurrentUserDep) -> list[dict]:
-    rows = list(db.scalars(select(PhoneGroup).order_by(PhoneGroup.id.desc())))
+def list_phone_groups(db: DbSession, user: CurrentUserDep) -> list[dict]:
+    stmt = select(PhoneGroup).order_by(PhoneGroup.id.desc())
+    stmt = apply_merchant_scope(stmt, user, db, PhoneGroup)
+    rows = list(db.scalars(stmt))
     # Aggregate counts in a single query so the response stays O(1) round-trips.
     counts = dict(db.execute(
         select(Phone.group_id, func.count(Phone.id)).group_by(Phone.group_id)
