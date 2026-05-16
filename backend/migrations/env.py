@@ -23,11 +23,22 @@ if config.config_file_name is not None:
 
 # Override the URL from alembic.ini with the app's runtime URL. -x url=...
 # still wins (CLI arg) for one-off targets.
+#
+# CRITICAL: `str(URL_object)` masks the password as '***' as a leak-prevention
+# default. Alembic would then try to connect with literal "***" and fail
+# with "Access denied (using password: YES)". Use render_as_string(
+# hide_password=False) to keep the real password in the URL string.
 cli_url = context.get_x_argument(as_dictionary=True).get("url")
 if cli_url:
     config.set_main_option("sqlalchemy.url", cli_url)
 else:
-    config.set_main_option("sqlalchemy.url", str(settings.database_url))
+    db_url = settings.database_url
+    # SQLAlchemy URL exposes the real password via render_as_string;
+    # plain str() returns a masked version.
+    config.set_main_option(
+        "sqlalchemy.url",
+        db_url.render_as_string(hide_password=False) if hasattr(db_url, "render_as_string") else str(db_url),
+    )
 
 target_metadata = Base.metadata
 
