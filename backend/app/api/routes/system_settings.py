@@ -7,7 +7,7 @@ from sqlalchemy import select
 from backend.app.api.deps import AdminDep, DbSession
 from backend.app.core.crypto import encrypt_secret
 from backend.app.models.system_setting import SystemSetting
-from backend.app.services import translator
+from backend.app.services import telegram_health, translator
 from backend.app.services.audit import write_audit
 
 router = APIRouter()
@@ -93,3 +93,14 @@ def update_translator_config(
     )
     db.commit()
     return get_translator_config(db, admin)
+
+
+# ---------- telegram pre-flight ----------
+
+@router.get("/telegram-health")
+def telegram_health_check(_: AdminDep) -> dict:
+    """Pre-flight: are TELEGRAM_API_ID / API_HASH set AND can this host
+    actually reach a Telegram MTProto DC right now? No account login
+    happens — just a transport handshake. Use before any new-account
+    flow to catch 'env not set' or 'firewall blocks' early."""
+    return telegram_health.check_telegram_health()

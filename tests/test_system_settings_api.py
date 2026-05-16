@@ -110,6 +110,98 @@ class TranslatorSettingsApiTestCase(unittest.TestCase):
         self.assertEqual(r.status_code, 403, r.text)
 
 
+class TelegramHealthApiTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.db = SessionLocal()
+        for row in self.db.query(SupportAgent).all():
+            self.db.delete(row)
+        self.db.commit()
+        self.auth = _bootstrap_admin()
+
+    def tearDown(self) -> None:
+        self.db.close()
+
+    def test_returns_unconfigured_when_env_missing(self) -> None:
+        from backend.app.services import telegram_health
+        from backend.app.core.config import settings as cfg
+        old_id, old_hash = cfg.telegram_api_id, cfg.telegram_api_hash
+        cfg.telegram_api_id = ""
+        cfg.telegram_api_hash = ""
+        try:
+            r = client.get("/api/system/telegram-health", headers=self.auth)
+        finally:
+            cfg.telegram_api_id, cfg.telegram_api_hash = old_id, old_hash
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertFalse(body["configured"])
+        self.assertFalse(body["reachable"])
+        self.assertIn("未在 .env", body["error"])
+
+    def test_returns_reachable_true_when_probe_succeeds(self) -> None:
+        from backend.app.services import telegram_health
+        from backend.app.core.config import settings as cfg
+
+        cfg.telegram_api_id = "12345"
+        cfg.telegram_api_hash = "abc123"
+        # Replace _probe_dc with an async function directly (patch.object
+        # with side_effect= an async fn ends up wrapping it in a MagicMock
+        # whose call result isn't the awaited coroutine).
+        original = telegram_health._probe_dc
+
+        async def fake_probe(api_id, api_hash):
+            return True
+        telegram_health._probe_dc = fake_probe
+        telegram_health._have_telethon = lambda: True
+        try:
+            r = client.get("/api/system/telegram-health", headers=self.auth)
+        finally:
+            telegram_health._probe_dc = original
+            cfg.telegram_api_id = ""
+            cfg.telegram_api_hash = ""
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertTrue(body["configured"])
+        self.assertTrue(body["reachable"])
+        self.assertIsNone(body["error"])
+
+    def test_returns_error_when_probe_raises(self) -> None:
+        from backend.app.services import telegram_health
+        from backend.app.core.config import settings as cfg
+
+        cfg.telegram_api_id = "12345"
+        cfg.telegram_api_hash = "abc123"
+        original = telegram_health._probe_dc
+
+        async def boom(api_id, api_hash):
+            raise ConnectionError("network unreachable")
+        telegram_health._probe_dc = boom
+        telegram_health._have_telethon = lambda: True
+        try:
+            r = client.get("/api/system/telegram-health", headers=self.auth)
+        finally:
+            telegram_health._probe_dc = original
+            cfg.telegram_api_id = ""
+            cfg.telegram_api_hash = ""
+        body = r.json()
+        self.assertTrue(body["configured"])
+        self.assertFalse(body["reachable"])
+        self.assertIn("network unreachable", body["error"])
+
+    def test_endpoint_requires_admin(self) -> None:
+        agent = SupportAgent(
+            username="staffH", nickname="s",
+            password_hash=hash_password("staffpwd1"),
+            role="agent", status="enabled",
+        )
+        self.db.add(agent)
+        self.db.commit()
+        tok = client.post("/api/auth/login",
+                          json={"username": "staffH", "password": "staffpwd1"}).json()["access_token"]
+        r = client.get("/api/system/telegram-health",
+                       headers={"Authorization": f"Bearer {tok}"})
+        self.assertEqual(r.status_code, 403, r.text)
+
+
 class TranslatorDispatcherTestCase(unittest.TestCase):
     """The high-level `translate()` reads provider from system_settings
     and dispatches to the matching backend."""

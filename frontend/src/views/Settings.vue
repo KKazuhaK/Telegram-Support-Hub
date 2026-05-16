@@ -7,6 +7,35 @@
     </template>
 
     <el-tabs v-model="tab">
+      <el-tab-pane label="Telegram 状态" name="telegram">
+        <div style="max-width: 600px;">
+          <el-descriptions :column="1" border>
+            <el-descriptions-item label="API ID / HASH 是否配置">
+              <el-tag :type="tg.configured ? 'success' : 'danger'" size="small">
+                {{ tg.configured ? '✓ 已配置' : '✗ 未配置（.env）' }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="能否连通 Telegram 服务器">
+              <el-tag :type="tg.reachable ? 'success' : 'danger'" size="small" v-if="tg.checked">
+                {{ tg.reachable ? '✓ 通' : '✗ 不通' }}
+              </el-tag>
+              <el-tag size="small" type="info" v-else>未检测</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="tg.error" label="错误信息">
+              <span class="error-text">{{ tg.error }}</span>
+            </el-descriptions-item>
+          </el-descriptions>
+          <div style="margin-top: 12px;">
+            <el-button type="primary" :loading="tgBusy" @click="checkTelegram">
+              立即检测
+            </el-button>
+            <span class="hint" style="margin-left: 12px;">
+              探测不会登录任何账号，只做一次 MTProto 握手；境内服务器不通时通常需要配代理 / 反代。
+            </span>
+          </div>
+        </div>
+      </el-tab-pane>
+
       <el-tab-pane label="翻译服务" name="translator">
         <el-form label-position="top" :model="tr" style="max-width: 600px;">
           <el-form-item label="翻译服务商">
@@ -80,7 +109,31 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
 
-const tab = ref('translator')
+const tab = ref('telegram')
+
+// --- telegram health ---
+const tg = reactive({
+  configured: false,
+  reachable: false,
+  checked: false,
+  error: null,
+})
+const tgBusy = ref(false)
+
+async function checkTelegram() {
+  tgBusy.value = true
+  try {
+    const { data } = await http.get('/system/telegram-health')
+    Object.assign(tg, {
+      configured: !!data.configured,
+      reachable: !!data.reachable,
+      error: data.error || null,
+      checked: true,
+    })
+  } finally {
+    tgBusy.value = false
+  }
+}
 const tr = reactive({
   provider: 'google_free',
   proxy_url: '',
@@ -175,7 +228,7 @@ async function test() {
   }
 }
 
-onMounted(load)
+onMounted(() => { load(); checkTelegram() })
 </script>
 
 <style scoped>
@@ -184,4 +237,5 @@ onMounted(load)
 .hint code { background: #f5f5f5; padding: 0 4px; border-radius: 3px; }
 .test-result { margin-left: 12px; font-size: 13px; color: #f56c6c; }
 .test-result.ok { color: #67c23a; }
+.error-text { color: #f56c6c; word-break: break-all; }
 </style>
