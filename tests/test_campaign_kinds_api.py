@@ -73,6 +73,58 @@ class BatchOperationCampaignTestCase(unittest.TestCase):
         # number of eligible accounts in the chosen groups.
         self.assertEqual(body["target_count"], 1)
 
+    def test_operation_runs_endpoint_surfaces_per_account_audit(self) -> None:
+        # batch_op campaigns don't queue MessageRecord rows — execute_operation
+        # writes per-account outcomes to audit_logs. The /operation-runs
+        # endpoint should re-surface those so the UI 详情 dialog can show
+        # why specific accounts failed.
+        from backend.app.models.audit import AuditLog
+        with SessionLocal() as db:
+            group, _ = _seed_group_and_template(db)
+            # Two more accounts in the group.
+            acc2 = Account(tg_user_id="acc2", session_path="/tmp/acc2.session",
+                           status="active", enabled=True, phone="+999",
+                           nickname="b")
+            acc3 = Account(tg_user_id="acc3", session_path="/tmp/acc3.session",
+                           status="active", enabled=True, phone="+888")
+            db.add(acc2); db.add(acc3)
+            db.flush()
+            db.add(AccountGroupMember(account_id=acc2.id, group_id=group.id))
+            db.add(AccountGroupMember(account_id=acc3.id, group_id=group.id))
+            camp = Campaign(name="ops", task_kind="batch_op",
+                            operation_target="delete_friend",
+                            account_group_ids=[group.id])
+            db.add(camp)
+            db.flush()
+            camp_id = camp.id
+            for acc, ok, code, msg in [
+                (acc2, True, None, None),
+                (acc3, False, "FloodWait", "wait 60s"),
+            ]:
+                db.add(AuditLog(
+                    actor_kind="system",
+                    action="campaign.batch_op.delete_friend",
+                    target_type="account", target_id=str(acc.id),
+                    detail={"campaign_id": camp_id, "ok": ok,
+                            "error_code": code, "error_message": msg},
+                ))
+            db.commit()
+
+        r = self.client.get(f"/api/campaigns/{camp_id}/operation-runs", headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        rows = r.json()
+        self.assertEqual(len(rows), 2)
+        by_phone = {row["account_phone"]: row for row in rows}
+        self.assertTrue(by_phone["+999"]["ok"])
+        self.assertFalse(by_phone["+888"]["ok"])
+        self.assertEqual(by_phone["+888"]["error_code"], "FloodWait")
+        self.assertEqual(by_phone["+888"]["error_message"], "wait 60s")
+        self.assertEqual(by_phone["+999"]["account_nickname"], "b")
+
+    def test_operation_runs_endpoint_404_for_unknown_campaign(self) -> None:
+        r = self.client.get("/api/campaigns/99999/operation-runs", headers=self.auth)
+        self.assertEqual(r.status_code, 404)
+
     def test_modify_info_requires_extra_params(self) -> None:
         with SessionLocal() as db:
             group, _ = _seed_group_and_template(db)

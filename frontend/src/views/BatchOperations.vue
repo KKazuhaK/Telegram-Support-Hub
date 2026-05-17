@@ -20,8 +20,9 @@
       <el-table-column prop="task_kind" label="类型" width="100" />
       <el-table-column prop="target_count" label="总数" width="80" />
       <el-table-column prop="status" label="状态" width="100" />
-      <el-table-column label="操作" width="220">
+      <el-table-column label="操作" width="280">
         <template #default="{ row }">
+          <el-button size="small" link @click="openRunsDialog(row)">详情</el-button>
           <el-button size="small" link @click="action(row, 'start')">启动</el-button>
           <el-button size="small" link @click="action(row, 'pause')">暂停</el-button>
           <el-button size="small" link type="danger" @click="action(row, 'cancel')">取消</el-button>
@@ -29,6 +30,40 @@
       </el-table-column>
     </el-table>
   </el-card>
+
+  <el-dialog v-model="runsDialog"
+             :title="runsTarget ? `任务 #${runsTarget.id} · ${runsTarget.name} · 执行明细` : '执行明细'"
+             width="860px" top="6vh">
+    <div v-if="runsTarget" class="runs-summary">
+      <el-tag type="info">总数 {{ runsTarget.target_count ?? '—' }}</el-tag>
+      <el-tag type="success">成功 {{ runsTarget.sent_count ?? 0 }}</el-tag>
+      <el-tag type="danger">失败 {{ runsTarget.failed_count ?? 0 }}</el-tag>
+      <el-tag>状态 {{ runsTarget.status }}</el-tag>
+    </div>
+    <el-table :data="runs" v-loading="runsLoading" size="small" border stripe
+              empty-text="还没有执行记录。任务可能尚未启动，或没有任何符合条件的账号被选中。">
+      <el-table-column label="账号" min-width="180">
+        <template #default="{ row }">
+          <div>{{ row.account_phone || row.account_tg_user_id || `#${row.account_id}` }}</div>
+          <div v-if="row.account_nickname" class="muted">{{ row.account_nickname }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="结果" width="90">
+        <template #default="{ row }">
+          <el-tag :type="row.ok ? 'success' : 'danger'" size="small">
+            {{ row.ok ? '成功' : '失败' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="error_code" label="错误码" width="160" />
+      <el-table-column prop="error_message" label="错误信息" min-width="260" show-overflow-tooltip />
+      <el-table-column prop="ran_at" label="时间" width="180" />
+    </el-table>
+    <template #footer>
+      <el-button @click="loadRuns" :loading="runsLoading">刷新</el-button>
+      <el-button @click="runsDialog = false">关闭</el-button>
+    </template>
+  </el-dialog>
 
   <el-dialog v-model="dialogVisible" title="新增批量操作任务" width="780px" top="6vh">
     <div class="dialog-grid">
@@ -174,6 +209,27 @@ async function action(row, name) {
   await load()
 }
 
+const runsDialog = ref(false)
+const runsTarget = ref(null)
+const runs = ref([])
+const runsLoading = ref(false)
+
+async function openRunsDialog(row) {
+  runsTarget.value = row
+  runs.value = []
+  runsDialog.value = true
+  await loadRuns()
+}
+
+async function loadRuns() {
+  if (!runsTarget.value) return
+  runsLoading.value = true
+  try {
+    const { data } = await http.get(`/campaigns/${runsTarget.value.id}/operation-runs`)
+    runs.value = data || []
+  } finally { runsLoading.value = false }
+}
+
 onMounted(load)
 </script>
 
@@ -189,4 +245,6 @@ onMounted(load)
 .help-title { font-weight: 600; color: #303133; margin-bottom: 6px; font-size: 13px; }
 .help-card ul { margin: 4px 0; padding-left: 18px; font-size: 12px; color: #606266; line-height: 1.7; }
 .help-card p { margin: 4px 0; font-size: 12px; color: #606266; line-height: 1.6; }
+.runs-summary { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.muted { color: #909399; font-size: 12px; }
 </style>

@@ -402,3 +402,61 @@ def list_campaign_messages(campaign_id: int, db: DbSession, _: CurrentUserDep, l
         )
     )
     return list_dict(rows)
+
+
+@router.get("/{campaign_id}/operation-runs")
+def list_operation_runs(
+    campaign_id: int, db: DbSession, _: CurrentUserDep,
+    limit: int = 500, offset: int = 0,
+) -> list[dict]:
+    """Per-account run results for a batch_op / modify_info campaign.
+    Broadcast campaigns expose per-target rows via /messages; the
+    non-message kinds don't queue MessageRecord rows, so execute_operation
+    drops the outcome into audit_logs with action
+    `campaign.{task_kind}.{operation}` and detail
+    `{campaign_id, ok, error_code, error_message}`. We re-surface those
+    rows here so the operator can see why a batch failed without
+    drilling into the raw audit-log page."""
+    from backend.app.models.account import Account
+    from backend.app.models.audit import AuditLog
+
+    campaign = db.get(Campaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    rows = list(db.scalars(
+        select(AuditLog)
+        .where(AuditLog.target_type == "account")
+        .where(AuditLog.action.like(f"campaign.{campaign.task_kind}.%"))
+        .where(AuditLog.detail["campaign_id"].as_integer() == campaign_id)
+        .order_by(AuditLog.id.desc())
+        .offset(offset).limit(limit)
+    ))
+    if not rows:
+        return []
+    # Bulk-resolve account meta so the dialog can show phone/username
+    # instead of opaque ids.
+    acc_ids = {int(r.target_id) for r in rows if r.target_id and r.target_id.isdigit()}
+    acc_map: dict[int, Account] = {}
+    if acc_ids:
+        for a in db.scalars(select(Account).where(Account.id.in_(acc_ids))):
+            acc_map[a.id] = a
+    out: list[dict] = []
+    for r in rows:
+        d = r.detail or {}
+        try:
+            aid = int(r.target_id) if r.target_id else None
+        except (TypeError, ValueError):
+            aid = None
+        acc = acc_map.get(aid) if aid else None
+        out.append({
+            "id": r.id,
+            "account_id": aid,
+            "account_phone": acc.phone if acc else None,
+            "account_nickname": acc.nickname if acc else None,
+            "account_tg_user_id": acc.tg_user_id if acc else None,
+            "ok": bool(d.get("ok")),
+            "error_code": d.get("error_code"),
+            "error_message": d.get("error_message"),
+            "ran_at": r.created_at,
+        })
+    return out
