@@ -61,7 +61,16 @@
       </el-table-column>
       <el-table-column prop="error_code" label="错误码" width="160" />
       <el-table-column prop="error_message" label="错误信息" min-width="240" show-overflow-tooltip />
-      <el-table-column prop="sent_at" label="时间" width="160" />
+      <el-table-column label="下次重试" width="160">
+        <template #default="{ row }">
+          <span v-if="['queued', 'retry', 'sending'].includes(row.status) && row.next_run_at"
+                :class="{ overdue: isOverdue(row.next_run_at) }">
+            {{ formatRetry(row.next_run_at) }}
+          </span>
+          <span v-else style="color:#bbb">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column prop="sent_at" label="发送时间" width="160" />
     </el-table>
     <template #footer>
       <el-button @click="loadRuns" :loading="runsLoading">刷新</el-button>
@@ -371,6 +380,28 @@ async function loadRuns() {
   } finally { runsLoading.value = false }
 }
 
+function formatRetry(iso) {
+  // Compact "MM-DD HH:mm:ss" + relative "(还有 5 分钟)" — useful when
+  // a wave of retries is queued so the operator sees the spacing.
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  const pad = (n) => String(n).padStart(2, '0')
+  const stamp = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  const diffMs = d.getTime() - Date.now()
+  if (diffMs <= 0) return `${stamp}（已到点）`
+  const mins = Math.round(diffMs / 60000)
+  if (mins < 1) return `${stamp}（<1 分钟）`
+  if (mins < 60) return `${stamp}（还有 ${mins} 分钟）`
+  const hrs = (mins / 60).toFixed(1)
+  return `${stamp}（还有 ${hrs} 小时）`
+}
+
+function isOverdue(iso) {
+  const d = new Date(iso)
+  return !isNaN(d.getTime()) && d.getTime() <= Date.now()
+}
+
 async function action(row, name) {
   await http.post(`/campaigns/${row.id}/${name}`)
   ElMessage.success(`已${({ start: '启动', pause: '暂停', resume: '继续', cancel: '取消' })[name]}`)
@@ -426,4 +457,5 @@ onMounted(load)
 }
 .runs-summary { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .muted { color: #909399; font-size: 12px; }
+.overdue { color: #f56c6c; font-weight: 600; }
 </style>

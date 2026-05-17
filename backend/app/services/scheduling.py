@@ -70,8 +70,33 @@ def next_run_after_success(now: datetime, view: SendSettingsView) -> datetime:
 
 
 def next_run_after_failure(now: datetime, view: SendSettingsView) -> datetime:
+    """Flat-interval postpone — used when the send was NOT attempted
+    because a pre-condition failed (quiet hours / daily quota / lock
+    unavailable). Treats each postpone as a no-op; no backoff."""
     delta = add_random_jitter(view.failure_interval_seconds, view.random_min_seconds, view.random_max_seconds)
     return now + timedelta(seconds=delta)
+
+
+def backoff_after_send_failure(
+    now: datetime, view: SendSettingsView, attempt_count: int,
+    cap_seconds: int = 3600,
+) -> datetime:
+    """Exponential backoff for an actual send attempt that hit a
+    transient error (network blip, RPC error). Wait time doubles per
+    attempt, capped so a stuck message doesn't get scheduled hours out:
+
+        attempt 1 → failure_interval × 1
+        attempt 2 → failure_interval × 2
+        attempt 3 → failure_interval × 4
+        attempt N → min(failure_interval × 2^(N-1), cap_seconds)
+
+    Random jitter is added on top so a wave of retries doesn't
+    re-synchronise into another wave."""
+    attempt = max(1, int(attempt_count))
+    base = max(1, view.failure_interval_seconds)
+    delay = min(base * (2 ** (attempt - 1)), cap_seconds)
+    delay = add_random_jitter(delay, view.random_min_seconds, view.random_max_seconds)
+    return now + timedelta(seconds=delay)
 
 
 def lock_ttl_seconds(view: SendSettingsView, padding: int = 30) -> int:

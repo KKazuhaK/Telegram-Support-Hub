@@ -5,6 +5,7 @@ from datetime import datetime
 from backend.app.services.scheduling import (
     SendSettingsView,
     add_random_jitter,
+    backoff_after_send_failure,
     in_quiet_hours,
     lock_ttl_seconds,
     next_run_after_failure,
@@ -63,6 +64,23 @@ class SchedulingTestCase(unittest.TestCase):
         view = SendSettingsView(failure_interval_seconds=240, random_min_seconds=0, random_max_seconds=0)
         nxt = next_run_after_failure(now, view)
         self.assertEqual((nxt - now).total_seconds(), 240)
+
+    def test_backoff_doubles_per_attempt(self) -> None:
+        now = datetime(2026, 5, 15, 0, 0)
+        view = SendSettingsView(failure_interval_seconds=120,
+                                random_min_seconds=0, random_max_seconds=0)
+        self.assertEqual((backoff_after_send_failure(now, view, 1) - now).total_seconds(), 120)
+        self.assertEqual((backoff_after_send_failure(now, view, 2) - now).total_seconds(), 240)
+        self.assertEqual((backoff_after_send_failure(now, view, 3) - now).total_seconds(), 480)
+        self.assertEqual((backoff_after_send_failure(now, view, 4) - now).total_seconds(), 960)
+
+    def test_backoff_capped_so_it_never_runs_away(self) -> None:
+        # Large attempt count should never push us past the cap.
+        now = datetime(2026, 5, 15, 0, 0)
+        view = SendSettingsView(failure_interval_seconds=120,
+                                random_min_seconds=0, random_max_seconds=0)
+        nxt = backoff_after_send_failure(now, view, 20, cap_seconds=3600)
+        self.assertEqual((nxt - now).total_seconds(), 3600)
 
     def test_lock_ttl_padding_added(self) -> None:
         view = SendSettingsView(success_interval_seconds=60, random_max_seconds=10)

@@ -15,6 +15,7 @@ from backend.app.models.message import MessageRecord
 from backend.app.models.proxy import ProxyEndpoint
 from backend.app.services.scheduling import (
     SendSettingsView,
+    backoff_after_send_failure,
     in_quiet_hours,
     lock_ttl_seconds,
     next_run_after_failure,
@@ -187,7 +188,14 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
                 else:
                     message.error_code = result.error_code
                     message.error_message = result.error_message
-                    message.next_run_at = next_run_after_failure(now, view).isoformat()
+                    # Exponential backoff per attempt — a transient
+                    # 5xx-ish failure shouldn't have us retry the same
+                    # message every 2 minutes for 6 minutes flat. Use
+                    # the post-increment attempt_count we already set
+                    # above so attempt 1 = 1×base, attempt 2 = 2×base.
+                    message.next_run_at = backoff_after_send_failure(
+                        now, view, message.attempt_count,
+                    ).isoformat()
                     # Account-level kill-switches: PeerFloodError means
                     # Telegram has flagged this account as a spammer —
                     # retrying just escalates toward a permaban. Same
