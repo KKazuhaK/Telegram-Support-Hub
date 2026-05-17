@@ -171,7 +171,29 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
                     message.error_code = result.error_code
                     message.error_message = result.error_message
                     message.next_run_at = next_run_after_failure(now, view).isoformat()
-                    if message.attempt_count >= settings.max_failed_attempts:
+                    # Account-level kill-switches: PeerFloodError means
+                    # Telegram has flagged this account as a spammer —
+                    # retrying just escalates toward a permaban. Same
+                    # for UserDeactivated (account terminated). Disable
+                    # the account immediately so the supervisor stops
+                    # feeding it new messages, and mark this message as
+                    # terminal (no retry).
+                    ACCOUNT_KILL_CODES = {
+                        "PeerFloodError",
+                        "UserDeactivatedError",
+                        "UserDeactivatedBanError",
+                    }
+                    if result.error_code in ACCOUNT_KILL_CODES:
+                        account.status = "limited"
+                        account.enabled = False
+                        account.last_error = (
+                            f"{result.error_code}: {result.error_message or ''} "
+                            f"(auto-disabled by send_worker)"
+                        )[:500]
+                        message.status = "failed_permanent"
+                        campaign.failed_count += 1
+                        failed += 1
+                    elif message.attempt_count >= settings.max_failed_attempts:
                         message.status = "failed_permanent"
                         campaign.failed_count += 1
                         failed += 1

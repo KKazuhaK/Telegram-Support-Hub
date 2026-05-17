@@ -161,6 +161,32 @@ class SendWorkerTestCase(unittest.TestCase):
             self.assertIn(stored.status, {"queued", "retry"})
             self.assertIsNotNone(stored.next_run_at)
 
+    def test_peer_flood_error_kills_account_immediately(self) -> None:
+        # Telegram's anti-spam flag. Continued sends escalate toward a
+        # permaban, so the account must be disabled on the spot — no
+        # retry loop, no waiting until attempt_count == max.
+        _, _, msg = _seed(self.db)
+
+        def fake_send(*_a, **_kw):
+            return TelegramSendResult(
+                ok=False, error_code="PeerFloodError",
+                error_message="Too many requests (caused by SendMessageRequest)",
+            )
+
+        with patch.object(send_tasks, "_send_via_adapter", side_effect=fake_send), \
+             patch.object(send_tasks, "account_send_lock", lambda aid, ttl: _NopLock()):
+            send_tasks.dispatch_send_queue(limit=10)
+
+        with SessionLocal() as db:
+            stored = db.get(MessageRecord, msg.id)
+            # No retry — straight to terminal.
+            self.assertEqual(stored.status, "failed_permanent")
+            self.assertEqual(stored.attempt_count, 1)
+            acc = db.query(Account).first()
+            self.assertFalse(acc.enabled)
+            self.assertEqual(acc.status, "limited")
+            self.assertIn("PeerFloodError", acc.last_error or "")
+
     def test_campaign_with_only_failures_transitions_to_failed(self) -> None:
         # All-failure broadcast must end in 'failed', not 'partially_failed'
         # — the latter implied at least one success, which is misleading.
