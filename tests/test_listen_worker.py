@@ -6,6 +6,8 @@ import tests.support as support
 
 SessionLocal = support.install_sqlite_session()
 
+from sqlalchemy import select
+
 from backend.app.models.account import Account, AccountGroup, AccountGroupMember
 from backend.app.models.campaign import Campaign
 from backend.app.models.customer import Customer, Friend
@@ -125,6 +127,35 @@ class ListenWorkerTestCase(unittest.TestCase):
                 direction="inbound", target_tg_user_id="7332000121"
             ).one()
             self.assertEqual(inbound.customer_id, promoted.id)
+
+    def test_unknown_sender_is_auto_promoted_to_customer(self) -> None:
+        # User asked for inbounds from unknown senders to go straight
+        # into the 客户 list instead of piling up in 未匹配. Verify a
+        # fresh sender ends up with a Customer (consent=True, placeholder
+        # phone, assigned to the receiving account) and the inbound
+        # MessageRecord is bound to it.
+        account, *_ = _seed_full(self.db)
+        payload = {
+            "account_id": account.id,
+            "tg_user_id": "5555000999",
+            "username": "rando",
+            "phone": None,
+            "text": "hi",
+            "date": "2026-05-17T03:00:00+00:00",
+        }
+        asyncio.run(_persist_reply(payload))
+        with SessionLocal() as db:
+            cust = db.scalar(
+                select(Customer).where(Customer.phone == "tg:5555000999")
+            )
+            self.assertIsNotNone(cust)
+            self.assertTrue(cust.consent)
+            self.assertEqual(cust.assigned_account_id, account.id)
+            self.assertEqual(cust.source, "auto_promoted_from_inbound")
+            inbound = db.query(MessageRecord).filter_by(
+                direction="inbound", target_tg_user_id="5555000999",
+            ).one()
+            self.assertEqual(inbound.customer_id, cust.id)
 
     def test_reply_with_attachment_persists_image_columns(self) -> None:
         # Telethon photo / image-document path: adapter passes

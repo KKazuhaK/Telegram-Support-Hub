@@ -31,14 +31,24 @@ router = APIRouter()
 
 
 def _rescan_and_retag_promoted(db) -> int:
-    """Catch-up scan: any orphan message whose target_tg_user_id matches
-    an existing Customer whose phone is the `tg:<id>` placeholder gets
-    retagged to that customer. Closes the window where the listen_worker
-    matched only by real phone and dropped messages from a
-    promoted-from-orphan sender back into the orphan bucket. Returns
-    the number of rows retagged."""
-    # Find orphan inbound rows that have a numeric target_tg_user_id and
-    # whose `tg:<id>` placeholder matches a real customer row.
+    """Two-phase catch-up sweep that drains the orphan bucket.
+
+    Phase 1 — existing behaviour: any orphan message whose
+    target_tg_user_id matches a Customer with the `tg:<id>` placeholder
+    phone gets retagged. Closes the window where listen_worker matched
+    only by real phone.
+
+    Phase 2 — auto-promote everything else: per the operator's
+    request, an inbound from an unknown sender shouldn't sit in
+    'unmatched' waiting for a manual click. For every distinct
+    (account_id, target_tg_user_id) still lacking a Customer, create
+    one (phone='tg:<id>' placeholder, consent=True, source=
+    'auto_promoted_from_inbound') and retag all of that sender's
+    orphan rows to it. Listen_worker already does this for new
+    inbounds; this sweep handles whatever was in the bucket before
+    the auto-promote shipped.
+
+    Returns the total number of rows retagged across both phases."""
     orphans = list(db.scalars(
         select(MessageRecord)
         .where(MessageRecord.customer_id.is_(None))
@@ -47,7 +57,7 @@ def _rescan_and_retag_promoted(db) -> int:
     ))
     if not orphans:
         return 0
-    # Build a (placeholder_phone -> customer_id) lookup in one query.
+    # Phase 1: bind to already-promoted Customers.
     placeholders = {f"tg:{m.target_tg_user_id}" for m in orphans}
     matched = {
         c.phone: c.id for c in db.scalars(
@@ -55,10 +65,43 @@ def _rescan_and_retag_promoted(db) -> int:
         )
     }
     retagged = 0
+    still_unmatched: list[MessageRecord] = []
     for m in orphans:
         cid = matched.get(f"tg:{m.target_tg_user_id}")
         if cid:
             m.customer_id = cid
+            retagged += 1
+        else:
+            still_unmatched.append(m)
+    # Phase 2: create Customers for the leftover senders. Group by
+    # (account_id, target_tg_user_id) so one Customer covers all of a
+    # sender's messages, and account assignment follows the receiving
+    # account.
+    by_sender: dict[tuple[int, str], list[MessageRecord]] = {}
+    for m in still_unmatched:
+        if not m.account_id:
+            continue
+        by_sender.setdefault((m.account_id, m.target_tg_user_id), []).append(m)
+    for (acc_id, tg_uid), rows in by_sender.items():
+        placeholder = f"tg:{tg_uid}"
+        cust = Customer(
+            phone=placeholder,
+            name=f"TG:{tg_uid}",
+            consent=True,
+            status="new",
+            assigned_account_id=acc_id,
+            source="auto_promoted_from_inbound",
+        )
+        db.add(cust)
+        try:
+            db.flush()
+        except Exception:
+            db.rollback()
+            cust = db.scalar(select(Customer).where(Customer.phone == placeholder))
+            if not cust:
+                continue
+        for m in rows:
+            m.customer_id = cust.id
             retagged += 1
     if retagged:
         db.commit()

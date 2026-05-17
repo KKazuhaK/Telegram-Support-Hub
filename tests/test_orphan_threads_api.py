@@ -8,6 +8,7 @@ import tests.support as support
 SessionLocal = support.install_sqlite_session()
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from backend.app.core.security import hash_password
 from backend.app.main import app
@@ -78,17 +79,21 @@ class OrphanThreadsTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         self.db.close()
 
-    def test_list_returns_distinct_orphan_threads_with_counts(self) -> None:
+    def test_list_drains_bucket_via_auto_promote(self) -> None:
+        # The list endpoint now runs auto_promote as a side-effect, so a
+        # request always returns an empty list — every orphan sender
+        # gets a fresh Customer + retag instead of waiting for a manual
+        # click. Aggregation logic still lives in case auto-promote
+        # fails for some sender (e.g. missing account_id); it's
+        # exercised by the per-sender test below.
         r = client.get("/api/orphan-threads", headers=self.auth)
         self.assertEqual(r.status_code, 200, r.text)
-        rows = r.json()
-        # 2 orphan groups (the customer-bound one is excluded).
-        self.assertEqual(len(rows), 2)
-        # Sorted by last_at desc → +234 (latest 01:02) before +999 (00:30).
-        self.assertEqual(rows[0]["phone"], "+2340000000")
-        self.assertEqual(rows[0]["msg_count"], 2)
-        self.assertEqual(rows[0]["last_snippet"], "在吗")
-        self.assertEqual(rows[1]["phone"], "+9990000000")
+        self.assertEqual(r.json(), [])
+        with SessionLocal() as db:
+            promoted = {c.phone for c in db.scalars(
+                select(Customer).where(Customer.source == "auto_promoted_from_inbound")
+            )}
+            self.assertEqual(promoted, {"tg:234001", "tg:999001"})
 
     def test_messages_endpoint_returns_thread_history(self) -> None:
         r = client.get(
@@ -124,10 +129,36 @@ class OrphanThreadsTestCase(unittest.TestCase):
         self.assertEqual(body["messages_retagged"], 2)
         self.assertEqual(body["customer"]["phone"], "+2340000000")
 
-        # Orphan list should now only have +999 left.
+        # Orphan list now empty: the +234 sender was explicit-promoted,
+        # the +999 sender is auto-promoted by the list-endpoint sweep.
         r = client.get("/api/orphan-threads", headers=self.auth)
-        rows = r.json()
-        self.assertEqual({r["phone"] for r in rows}, {"+9990000000"})
+        self.assertEqual(r.json(), [])
+
+    def test_list_auto_promotes_remaining_orphan_senders(self) -> None:
+        # Historical orphans (no matching Customer in the db) should be
+        # auto-promoted on the next /orphan-threads load so the operator
+        # doesn't have to click 转为客户 on every row. The 234001 and
+        # 999001 senders seeded in setUp both lack a Customer; after the
+        # GET, both should have Customers + the orphan list shrinks to
+        # zero.
+        r = client.get("/api/orphan-threads", headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        # Auto-promotion happened — list now empty.
+        self.assertEqual(r.json(), [])
+        with SessionLocal() as db:
+            created = {c.phone: c for c in db.scalars(
+                select(Customer).where(Customer.source == "auto_promoted_from_inbound")
+            )}
+            self.assertIn("tg:234001", created)
+            self.assertIn("tg:999001", created)
+            self.assertEqual(created["tg:234001"].assigned_account_id, self.account_id)
+            # All historical inbound rows for these senders got retagged.
+            still_orphan = db.query(MessageRecord).filter(
+                MessageRecord.customer_id.is_(None),
+                MessageRecord.direction == "inbound",
+                MessageRecord.target_tg_user_id.in_(["234001", "999001"]),
+            ).count()
+            self.assertEqual(still_orphan, 0)
 
     def test_list_retags_orphans_matching_tg_placeholder_customer(self) -> None:
         # Simulate the bug window: an inbound row from a sender whose
@@ -143,10 +174,10 @@ class OrphanThreadsTestCase(unittest.TestCase):
 
         r = client.get("/api/orphan-threads", headers=self.auth)
         self.assertEqual(r.status_code, 200, r.text)
-        rows = r.json()
-        # The +234 thread (target_tg_user_id=234001) must disappear from
-        # the orphan list because it was retagged to the promoted customer.
-        self.assertEqual({row["phone"] for row in rows}, {"+9990000000"})
+        # Phase 1 retags 234001 messages to the pre-existing Customer;
+        # Phase 2 auto-creates a Customer for 999001 → both buckets
+        # drained → list is empty.
+        self.assertEqual(r.json(), [])
 
         with SessionLocal() as db:
             retagged = db.query(MessageRecord).filter_by(
@@ -154,6 +185,8 @@ class OrphanThreadsTestCase(unittest.TestCase):
             ).all()
             self.assertTrue(retagged)
             for m in retagged:
+                # Phase 1 binding wins — the pre-existing Customer, not
+                # a freshly auto-promoted one.
                 self.assertEqual(m.customer_id, promoted.id)
 
     def test_promote_rejects_duplicate_phone(self) -> None:

@@ -55,6 +55,33 @@ async def _persist_reply(payload: dict) -> None:
             customer = db.scalar(
                 select(Customer).where(Customer.phone == f"tg:{tg_user_id}")
             )
+        # Auto-promote the sender to a Customer instead of leaving them
+        # in the 未匹配 (orphan) bucket. Admins were tired of clicking
+        # 「转为客户」 on every new contact; an unsolicited inbound is a
+        # strong opt-in signal so creating the row immediately matches
+        # the desired UX. assigned_account_id = the account that
+        # received the message so the existing agent-scope filters
+        # surface the conversation in the right operator's workspace.
+        if customer is None and tg_user_id and account_id:
+            placeholder_phone = phone or f"tg:{tg_user_id}"
+            customer = Customer(
+                phone=placeholder_phone,
+                name=payload.get("username") or f"TG:{tg_user_id}",
+                consent=True,
+                status="new",
+                assigned_account_id=account_id,
+                source="auto_promoted_from_inbound",
+            )
+            db.add(customer)
+            try:
+                db.flush()
+            except Exception:
+                # Concurrent insert from another worker for the same
+                # phone — fall back to the existing row.
+                db.rollback()
+                customer = db.scalar(
+                    select(Customer).where(Customer.phone == placeholder_phone)
+                )
         if customer:
             customer.last_reply_at = received_at
             customer.last_reply_text = text
