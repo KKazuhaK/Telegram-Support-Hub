@@ -77,6 +77,12 @@ class CampaignCreate(BaseModel):
     imported_targets: list[dict] | None = None
     extra_params: dict | None = None
     send_settings: SendSettings = Field(default_factory=SendSettings)
+    # Opt-in flag for follow-up / second-touch sends. When True, the
+    # customer_broadcast eligibility gate skips the status whitelist so
+    # already-sent / read / replied / contacted customers are included
+    # again. consent=True is still required regardless — that's the
+    # compliance hard line, not a UX one.
+    force_resend: bool = False
 
 
 def _require_broadcast(user) -> None:
@@ -102,7 +108,9 @@ def _scope_groups(user, requested: list[int]) -> list[int]:
     return requested
 
 
-def _build_customer_records(db, campaign: Campaign, template: MessageTemplate, customer_ids: list[int] | None, now_iso: str) -> int:
+def _build_customer_records(db, campaign: Campaign, template: MessageTemplate,
+                            customer_ids: list[int] | None, now_iso: str,
+                            force_resend: bool = False) -> int:
     # Two-pass with diagnostics so a 0-result tells the operator WHICH
     # condition failed (consent / status / unassigned), not just "0
     # targets". Stored on Campaign.extra_params for the UI to surface.
@@ -111,17 +119,18 @@ def _build_customer_records(db, campaign: Campaign, template: MessageTemplate, c
         base = base.where(Customer.id.in_(customer_ids))
     all_pool = list(db.scalars(base))
 
+    ok_status = ("new", "assigned", "failed", "queued")
+
+    def _status_ok(c: Customer) -> bool:
+        return force_resend or c.status in ok_status
+
     no_consent = [c for c in all_pool if not c.consent]
     wrong_status = [c for c in all_pool
-                    if c.consent and c.status not in ("new", "assigned", "failed", "queued")]
+                    if c.consent and not _status_ok(c)]
     unassigned = [c for c in all_pool
-                  if c.consent
-                  and c.status in ("new", "assigned", "failed", "queued")
-                  and not c.assigned_account_id]
+                  if c.consent and _status_ok(c) and not c.assigned_account_id]
     eligible = [c for c in all_pool
-                if c.consent
-                and c.status in ("new", "assigned", "failed", "queued")
-                and c.assigned_account_id]
+                if c.consent and _status_ok(c) and c.assigned_account_id]
 
     for customer in eligible:
         rendered = render_message(template.body, {
@@ -280,7 +289,10 @@ def create_campaign(payload: CampaignCreate, db: DbSession, user: CurrentUserDep
     now_iso = datetime.now(UTC).isoformat()
     if payload.task_kind == "broadcast":
         if op == "customer_broadcast":
-            count = _build_customer_records(db, campaign, template, payload.customer_ids, now_iso)
+            count = _build_customer_records(
+                db, campaign, template, payload.customer_ids, now_iso,
+                force_resend=payload.force_resend,
+            )
         elif op == "friend_broadcast":
             count = _build_friend_records(db, campaign, template, group_ids, payload.friend_ids, now_iso)
         else:  # imported_target_broadcast

@@ -199,6 +199,75 @@ class BatchOperationCampaignTestCase(unittest.TestCase):
         self.assertEqual([c["name"] for c in bo], ["b1"])
         self.assertEqual([c["name"] for c in mi], ["m1"])
 
+    def test_customer_broadcast_force_resend_bypasses_status_gate(self) -> None:
+        # Customer already in a post-send state (replied) is blocked by
+        # the default status whitelist; with force_resend=true the gate
+        # is skipped so the same customer is queued again.
+        from backend.app.models.customer import Customer
+        from backend.app.models.account import Account as Acc
+        with SessionLocal() as db:
+            group, tpl = _seed_group_and_template(db)
+            account = db.query(Acc).first()
+            cust = Customer(phone="+8613800000099", consent=True,
+                            assigned_account_id=account.id, status="replied")
+            db.add(cust); db.commit()
+            template_id = tpl.id
+            group_id = group.id
+            cust_id = cust.id
+
+        # Without the flag — 400 with the eligibility breakdown.
+        r = self.client.post(
+            "/api/campaigns",
+            json={"name": "f1", "template_id": template_id,
+                  "target_type": "customer_broadcast",
+                  "account_group_ids": [group_id],
+                  "customer_ids": [cust_id], "send_settings": {}},
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertIn("状态不在", r.json()["detail"])
+
+        # With force_resend — succeeds, status flipped to queued.
+        r = self.client.post(
+            "/api/campaigns",
+            json={"name": "f2", "template_id": template_id,
+                  "target_type": "customer_broadcast",
+                  "account_group_ids": [group_id],
+                  "customer_ids": [cust_id], "force_resend": True,
+                  "send_settings": {}},
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        with SessionLocal() as db:
+            self.assertEqual(db.get(Customer, cust_id).status, "queued")
+
+    def test_customer_broadcast_force_resend_still_blocks_no_consent(self) -> None:
+        # force_resend opens the status gate only — consent is the
+        # compliance hard line and must stay enforced.
+        from backend.app.models.customer import Customer
+        from backend.app.models.account import Account as Acc
+        with SessionLocal() as db:
+            group, tpl = _seed_group_and_template(db)
+            account = db.query(Acc).first()
+            cust = Customer(phone="+8613800000098", consent=False,
+                            assigned_account_id=account.id, status="replied")
+            db.add(cust); db.commit()
+            template_id = tpl.id
+            group_id = group.id
+            cust_id = cust.id
+
+        r = self.client.post(
+            "/api/campaigns",
+            json={"name": "fc", "template_id": template_id,
+                  "target_type": "customer_broadcast",
+                  "account_group_ids": [group_id],
+                  "customer_ids": [cust_id], "force_resend": True,
+                  "send_settings": {}},
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertIn("consent=false", r.json()["detail"])
+
     def test_broadcast_still_works_without_task_kind(self) -> None:
         # Backwards-compat: omitting task_kind should default to broadcast
         # and behave like before R5.

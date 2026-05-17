@@ -91,6 +91,15 @@
             <el-option v-for="g in groups" :key="g.id" :label="g.name" :value="g.id" />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="form.target_type === 'customer_broadcast'" label="强制重发">
+          <el-checkbox v-model="form.force_resend">
+            包含已 sent / read / replied 的客户（适合跟进 / 二次推送）
+          </el-checkbox>
+          <div class="form-hint">
+            默认只发状态为 new/assigned/failed/queued 的客户，避免重复打扰。
+            勾上后状态闸放开，但 <code>consent=false</code> 和未分配账号的客户仍会被跳过。
+          </div>
+        </el-form-item>
         <el-form-item v-if="form.target_type === 'imported_target_broadcast'" label="目标列表">
           <el-input
             v-model="importedTargetsText"
@@ -187,6 +196,7 @@ const defaultForm = () => ({
   name: '',
   template_id: null,
   target_type: 'customer_broadcast',
+  force_resend: false,
   account_group_ids: [],
   send_settings: {
     success_interval_seconds: 60,
