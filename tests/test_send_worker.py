@@ -161,6 +161,50 @@ class SendWorkerTestCase(unittest.TestCase):
             self.assertIn(stored.status, {"queued", "retry"})
             self.assertIsNotNone(stored.next_run_at)
 
+    def test_campaign_with_only_failures_transitions_to_failed(self) -> None:
+        # All-failure broadcast must end in 'failed', not 'partially_failed'
+        # — the latter implied at least one success, which is misleading.
+        _, campaign, msg = _seed(self.db)
+        with SessionLocal() as db:
+            stored = db.get(MessageRecord, msg.id)
+            stored.attempt_count = 2
+            db.commit()
+
+        def fake_send(*_a, **_kw):
+            return TelegramSendResult(ok=False, error_code="x", error_message="y")
+
+        with patch.object(send_tasks, "_send_via_adapter", side_effect=fake_send), \
+             patch.object(send_tasks, "account_send_lock", lambda aid, ttl: _NopLock()):
+            send_tasks.dispatch_send_queue(limit=10)
+
+        with SessionLocal() as db:
+            cmp = db.get(Campaign, campaign.id)
+            self.assertEqual(cmp.status, "failed")
+            self.assertIsNotNone(cmp.completed_at)
+
+    def test_stuck_running_campaign_recovered_on_idle_tick(self) -> None:
+        # Reproduce the bug: the last message was marked failed_permanent
+        # on a previous tick. Today's tick has no rows for this campaign,
+        # so the old per-batch sweep never re-checked it. The new full
+        # scan should now transition it on the next idle tick.
+        _, campaign, msg = _seed(self.db)
+        with SessionLocal() as db:
+            stored = db.get(MessageRecord, msg.id)
+            stored.status = "failed_permanent"
+            stored.attempt_count = 3
+            cmp = db.get(Campaign, campaign.id)
+            cmp.failed_count = 1
+            db.commit()
+
+        # Idle tick — no queued/retry rows exist.
+        with patch.object(send_tasks, "account_send_lock", lambda aid, ttl: _NopLock()):
+            send_tasks.dispatch_send_queue(limit=10)
+
+        with SessionLocal() as db:
+            cmp = db.get(Campaign, campaign.id)
+            self.assertEqual(cmp.status, "failed")
+            self.assertIsNotNone(cmp.completed_at)
+
     def test_reset_daily_quota_zeros_counters(self) -> None:
         account, _, _ = _seed(self.db)
         with SessionLocal() as db:

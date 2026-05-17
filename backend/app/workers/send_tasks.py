@@ -186,23 +186,35 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
 
             processed += 1
 
-        # Mark campaigns whose queue is exhausted as completed
-        active_campaign_ids = {m.campaign_id for m in rows if m.campaign_id}
-        for cid in active_campaign_ids:
-            cmp = db.get(Campaign, cid)
-            if not cmp:
-                continue
-            remaining = db.scalar(
-                select(MessageRecord)
+        # Mark campaigns whose queue is exhausted as terminal. Scan ALL
+        # running campaigns, not just the ones touched this tick — if
+        # the last message of a campaign was processed in a prior tick
+        # (and no further messages exist), restricting to active_ids
+        # leaves the campaign stuck on 'running' forever.
+        db.flush()  # make the just-mutated row statuses visible to the next select
+        running_campaigns = list(db.scalars(
+            select(Campaign).where(Campaign.status == "running")
+        ))
+        for cmp in running_campaigns:
+            has_pending = db.scalar(
+                select(MessageRecord.id)
                 .where(
-                    MessageRecord.campaign_id == cid,
+                    MessageRecord.campaign_id == cmp.id,
                     MessageRecord.status.in_(["queued", "retry", "sending"]),
                 )
                 .limit(1)
             )
-            if remaining is None and cmp.status == "running":
-                cmp.status = "partially_failed" if cmp.failed_count else "completed"
-                cmp.completed_at = now_iso
+            if has_pending is not None:
+                continue
+            sent_n = cmp.sent_count or 0
+            failed_n = cmp.failed_count or 0
+            if failed_n and not sent_n:
+                cmp.status = "failed"          # 100% failure
+            elif failed_n:
+                cmp.status = "partially_failed"
+            else:
+                cmp.status = "completed"
+            cmp.completed_at = now_iso
 
         db.commit()
 
