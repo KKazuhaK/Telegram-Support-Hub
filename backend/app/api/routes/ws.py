@@ -10,7 +10,10 @@ from backend.app.core.database import SessionLocal
 from backend.app.core.redis_client import get_redis
 from backend.app.core.security import decode_token
 from backend.app.models.agent import SupportAgent
-from backend.app.services.permissions import load_current_user
+from backend.app.models.tenant import BusinessAgent, Merchant
+from backend.app.services.permissions import (
+    load_business_agent_user, load_current_user, load_merchant_user,
+)
 from backend.app.services.reply_bus import REPLY_CHANNEL
 
 logger = logging.getLogger(__name__)
@@ -19,9 +22,25 @@ router = APIRouter()
 
 
 def _resolve_user(token: str):
+    """Decode the JWT and load the matching actor. Mirrors the HTTP
+    deps.get_current_user dispatch so business_agent / merchant tokens
+    work on WebSocket too (the old code only handled support_agent
+    and returned None for everyone else → close 1008 → HTTP 403)."""
     payload = decode_token(token)
-    agent_id = payload.get("agent_id")
+    actor_kind = payload.get("actor_kind", "support_agent")
+    actor_id = payload.get("actor_id") or payload.get("agent_id")
     with SessionLocal() as db:
+        if actor_kind == "business_agent":
+            ba = db.get(BusinessAgent, actor_id) if actor_id else None
+            if not ba or not ba.status:
+                return None
+            return load_business_agent_user(ba.name, ba.id)
+        if actor_kind == "merchant":
+            m = db.get(Merchant, actor_id) if actor_id else None
+            if not m or not m.status:
+                return None
+            return load_merchant_user(m.name, m.id)
+        agent_id = payload.get("agent_id")
         agent = db.get(SupportAgent, agent_id) if agent_id else None
         if not agent or agent.status != "enabled":
             return None
@@ -35,16 +54,19 @@ async def replies_stream(ws: WebSocket, token: str = "") -> None:
     enforced by filtering payload account_id against pre-loaded membership.
     """
     if not token:
+        logger.warning("WS /replies rejected: no token")
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
     try:
         user = _resolve_user(token)
     except Exception:
+        logger.exception("WS /replies _resolve_user raised")
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
     if user is None:
+        logger.warning("WS /replies rejected: _resolve_user returned None for token starting %s...", token[:20])
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
