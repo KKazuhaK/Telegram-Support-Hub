@@ -64,15 +64,28 @@ async def _persist_reply(payload: dict) -> None:
         # 3. Persist the inbound message as its own MessageRecord row so
         # the chat-history endpoint can render a real conversation
         # (out, in, out, in, ...) rather than only showing campaigns.
+        # Photo / image-document messages carry attachment_path +
+        # attachment_mime so the bubble can render the <img> the same
+        # way it does for outbound chat-uploads.
+        attachment_path = payload.get("attachment_path")
+        attachment_mime = payload.get("attachment_mime")
+        body_for_row = text
+        if attachment_path and not body_for_row:
+            # Empty caption → show a placeholder so the row isn't blank
+            # in plain-text views (audit / export). The chat UI sees the
+            # attachment_path and renders the image regardless.
+            body_for_row = "[图片]"
         inbound = MessageRecord(
             account_id=account_id,
             customer_id=customer.id if customer else None,
             phone=phone,
             target_tg_user_id=tg_user_id,
-            body_snapshot=text,
+            body_snapshot=body_for_row,
             direction="inbound",
             status="received",
             sent_at=received_at,
+            attachment_path=attachment_path,
+            attachment_mime=attachment_mime,
         )
         db.add(inbound)
 

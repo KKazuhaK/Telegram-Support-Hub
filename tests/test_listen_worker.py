@@ -126,6 +126,29 @@ class ListenWorkerTestCase(unittest.TestCase):
             ).one()
             self.assertEqual(inbound.customer_id, promoted.id)
 
+    def test_reply_with_attachment_persists_image_columns(self) -> None:
+        # Telethon photo / image-document path: adapter passes
+        # attachment_path + attachment_mime in the payload; the inbound
+        # MessageRecord must carry them through so the chat UI can
+        # render <img>. Empty text falls back to '[图片]' so plain-text
+        # views still show something.
+        account, customer, *_ = _seed_full(self.db)
+        payload = {
+            "account_id": account.id, "tg_user_id": "999",
+            "phone": "+8613800000000", "text": "",
+            "date": "2026-05-17T01:00:00+00:00",
+            "attachment_path": "chat/abc123.jpg",
+            "attachment_mime": "image/jpeg",
+        }
+        asyncio.run(_persist_reply(payload))
+        with SessionLocal() as db:
+            inbound = db.query(MessageRecord).filter_by(
+                direction="inbound", customer_id=customer.id,
+            ).one()
+            self.assertEqual(inbound.attachment_path, "chat/abc123.jpg")
+            self.assertEqual(inbound.attachment_mime, "image/jpeg")
+            self.assertEqual(inbound.body_snapshot, "[图片]")
+
     def test_reply_without_match_is_silent(self) -> None:
         # no seed
         payload = {

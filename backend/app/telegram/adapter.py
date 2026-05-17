@@ -680,6 +680,37 @@ class TelegramAdapter:
                     "text": event.raw_text,
                     "date": event.message.date.isoformat() if event.message.date else None,
                 }
+                # Capture image attachments so the chat UI can render the
+                # photo the customer sent. Only photos + image documents;
+                # other media (audio, video, sticker, generic document)
+                # would need separate handling — keep this surgical.
+                msg = event.message
+                is_photo = bool(getattr(msg, "photo", None))
+                doc = getattr(msg, "document", None)
+                doc_mime = getattr(doc, "mime_type", None) if doc else None
+                is_image_doc = bool(doc and doc_mime and doc_mime.startswith("image/"))
+                if is_photo or is_image_doc:
+                    import uuid as _uuid
+                    from pathlib import Path as _Path
+                    from backend.app.core.config import settings as _settings
+                    ext = (
+                        ".jpg" if is_photo else
+                        {"image/jpeg": ".jpg", "image/png": ".png",
+                         "image/gif": ".gif", "image/webp": ".webp"}.get(doc_mime, ".bin")
+                    )
+                    chat_dir = _settings.upload_dir / "chat"
+                    chat_dir.mkdir(parents=True, exist_ok=True)
+                    fname = f"{_uuid.uuid4().hex}{ext}"
+                    fpath = chat_dir / fname
+                    try:
+                        await msg.download_media(file=str(fpath))
+                        payload["attachment_path"] = f"chat/{fname}"
+                        payload["attachment_mime"] = "image/jpeg" if is_photo else doc_mime
+                    except Exception:
+                        logger.exception(
+                            "download_media failed for account %s msg %s",
+                            account.id, payload.get("message_id"),
+                        )
                 await on_message(payload)
             except Exception:
                 logger.exception("listen handler failed for account %s", account.id)
