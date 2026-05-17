@@ -575,6 +575,21 @@ class TelegramAdapter:
             except Exception:
                 logger.exception("listen handler failed for account %s", account.id)
 
+        # Heartbeat: Telegram routes update-pushes for an auth_key to a
+        # single active connection. Whenever something else opens the
+        # same session (e.g. backend-api's disposable copy for a send),
+        # the push channel migrates and never comes back — listen goes
+        # silent without any error. Periodic catch_up() pulls missed
+        # updates and re-arms us as the update target.
+        async def _heartbeat():
+            while True:
+                await asyncio.sleep(15)
+                try:
+                    await client.catch_up()
+                except Exception:
+                    logger.exception("catch_up heartbeat failed for account %s", account.id)
+
+        heartbeat_task = asyncio.create_task(_heartbeat())
         try:
             if stop_event is None:
                 await client.run_until_disconnected()
@@ -587,6 +602,11 @@ class TelegramAdapter:
                 for task in pending:
                     task.cancel()
         finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except (asyncio.CancelledError, Exception):
+                pass
             try:
                 await client.disconnect()
             except Exception:
