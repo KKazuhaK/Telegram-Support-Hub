@@ -115,9 +115,13 @@ class CustomerImportApiTestCase(unittest.TestCase):
 class CustomerEditApiTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
+        # MessageRecord wiped too — otherwise stale rows from earlier test
+        # files (orphan_threads / listen_worker etc.) leak in and inflate
+        # delete-detach counts on a recycled customer id.
+        from backend.app.models.message import MessageRecord
         with SessionLocal() as db:
-            for model in (Customer, AccountGroupMember, Account, AccountGroup,
-                          SupportAgentGroupPermission, SupportAgent):
+            for model in (MessageRecord, Customer, AccountGroupMember, Account,
+                          AccountGroup, SupportAgentGroupPermission, SupportAgent):
                 for row in db.query(model).all():
                     db.delete(row)
             db.commit()
