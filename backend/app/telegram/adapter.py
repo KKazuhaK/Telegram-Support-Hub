@@ -288,8 +288,54 @@ class TelegramAdapter:
                 pass
 
     async def resolve_target(self, client: Any, target: str) -> Any:
-        """Resolve a phone or @username to a Telegram entity."""
-        return await client.get_entity(target)
+        """Resolve a phone, @username, or numeric TG id to a Telegram entity.
+
+        For @username / numeric id, client.get_entity is enough. For a
+        phone number, get_entity only works if the phone is already in
+        this account's contact list — otherwise Telethon raises
+        ``ValueError: Cannot find any entity corresponding to '<phone>'``.
+        Mirror what the official clients do: temporarily import the
+        phone as a contact (so Telegram resolves it server-side), then
+        clean up. If Telegram says the phone isn't on Telegram, raise
+        a friendlier Chinese error so the operator knows it's a
+        target-side issue, not an account problem."""
+        if not target:
+            return await client.get_entity(target)
+        digits_only = target.lstrip("+").isdigit()
+        if not digits_only:
+            return await client.get_entity(target)
+        try:
+            return await client.get_entity(target)
+        except Exception:
+            pass
+        # Phone path: import as a one-shot contact.
+        import random as _random
+        from telethon.tl.functions.contacts import (
+            ImportContactsRequest, DeleteContactsRequest,
+        )
+        from telethon.tl.types import InputPhoneContact
+        contact = InputPhoneContact(
+            client_id=_random.randrange(2**31),
+            phone=target if target.startswith("+") else f"+{target}",
+            first_name="tmp", last_name="",
+        )
+        try:
+            result = await client(ImportContactsRequest([contact]))
+        except Exception as exc:
+            raise ValueError(
+                f"无法解析 {target}：导入联系人失败（{type(exc).__name__}）"
+            ) from exc
+        if not result.users:
+            raise ValueError(
+                f"{target} 不是 Telegram 注册号 / 对方设置了隐私不允许通过手机号被找到"
+            )
+        user = result.users[0]
+        # Best-effort cleanup so the account's contact list stays clean.
+        try:
+            await client(DeleteContactsRequest([user]))
+        except Exception:
+            pass
+        return user
 
     async def send_message(
         self,
