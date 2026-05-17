@@ -22,14 +22,9 @@
     </div>
 
     <div class="action-row">
-      <el-upload
-        v-if="auth.isAdmin"
-        :http-request="uploadZip"
-        :show-file-list="false"
-        accept=".zip"
-      >
-        <el-button type="primary">上传 session ZIP</el-button>
-      </el-upload>
+      <el-button v-if="auth.isAdmin" type="primary" @click="openImportDialog">
+        上传 session ZIP
+      </el-button>
       <el-button-group v-if="auth.isAdmin">
         <el-button :disabled="!selectedIds.length" @click="batchEnabled(true)">上线</el-button>
         <el-button :disabled="!selectedIds.length" @click="batchEnabled(false)">下线</el-button>
@@ -102,6 +97,32 @@
       <template #footer>
         <el-button @click="moveGroupDialog = false">取消</el-button>
         <el-button type="primary" :loading="busy" @click="doMoveGroup">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="importDialog" title="上传 session ZIP" width="480px">
+      <el-form label-width="100px">
+        <el-form-item label="目标分组" required>
+          <el-select v-model="importGroupId" placeholder="必选 —— 新号会归入该分组"
+                     style="width: 100%">
+            <el-option v-for="g in groups" :key="g.id" :label="g.name" :value="g.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="文件">
+          <el-upload
+            :http-request="uploadZip"
+            :show-file-list="false"
+            :before-upload="beforeImportUpload"
+            accept=".zip">
+            <el-button type="primary" :disabled="!importGroupId">选择 ZIP 并开始导入</el-button>
+          </el-upload>
+        </el-form-item>
+      </el-form>
+      <div class="muted" style="font-size:12px;line-height:1.6;">
+        强制选分组：客服只能看到名下分组里 TG 号收到的客户。要"一个客服一批号"严格隔离，建议为每个客服建专属分组。
+      </div>
+      <template #footer>
+        <el-button @click="importDialog = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -367,9 +388,35 @@ function onStatusTabChange() {
   load()
 }
 
+const importDialog = ref(false)
+const importGroupId = ref(null)
+
+async function openImportDialog() {
+  // Pre-load groups so the dropdown is populated when the dialog opens.
+  if (!groups.value.length) {
+    const { data: g } = await http.get('/account-groups')
+    groups.value = g
+  }
+  importGroupId.value = null
+  importDialog.value = true
+}
+
+function beforeImportUpload() {
+  if (!importGroupId.value) {
+    ElMessage.warning('请先选择目标分组')
+    return false
+  }
+  return true
+}
+
 async function uploadZip({ file }) {
+  if (!importGroupId.value) {
+    ElMessage.warning('请先选择目标分组')
+    return
+  }
   const fd = new FormData()
   fd.append('sessions', file)
+  fd.append('group_id', String(importGroupId.value))
   const { data } = await http.post('/accounts/import-zip', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
@@ -395,6 +442,7 @@ async function uploadZip({ file }) {
   } else {
     ElMessage.success(`导入 ${ok} 个`)
   }
+  importDialog.value = false
   await load()
 }
 

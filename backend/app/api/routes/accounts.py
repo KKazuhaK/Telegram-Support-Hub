@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import delete as sa_delete, select
 
@@ -247,12 +247,26 @@ def list_accounts(
 
 
 @router.post("/import-zip")
-async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File(...)) -> dict:
+async def import_zip(
+    db: DbSession, admin: AdminDep,
+    sessions: UploadFile = File(...),
+    group_id: int = Form(...),
+) -> dict:
     if not sessions.filename or not sessions.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="请上传 .zip 后缀的 session 压缩包")
+    # Group is required: previously the import silently dropped new
+    # accounts into the legacy `未分组` bucket, leaving them invisible
+    # to every agent until an admin moved them. Forcing the choice up
+    # front mirrors the simpler '一组一客服' workflow the operator asked
+    # for. Legacy ungrouped accounts are untouched.
+    target_group = db.get(AccountGroup, group_id)
+    if not target_group:
+        raise HTTPException(
+            status_code=400,
+            detail=f"账号分组 #{group_id} 不存在，请先在「账号分组」页创建",
+        )
 
     content = await sessions.read()
-    default_group = ensure_default_group(db)
     imported: list[dict] = []
     skipped: list[dict] = []
 
@@ -284,7 +298,7 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
             db.add(account)
             db.flush()
             db.add(AccountGroupMember(
-                account_id=account.id, group_id=default_group.id, is_primary=True,
+                account_id=account.id, group_id=target_group.id, is_primary=True,
             ))
         else:
             account.session_path = str(session_path)

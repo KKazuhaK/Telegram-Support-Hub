@@ -22,6 +22,22 @@ def _make_zip(entries: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
+_grp_counter = [0]
+
+
+def _make_group(name: str = "imp") -> int:
+    """import-zip now requires a target group. Tests create a throw-away
+    group and pass its id in the form payload. The counter suffix avoids
+    AccountGroup.name/code unique-constraint clashes when a single test
+    invokes the helper more than once."""
+    _grp_counter[0] += 1
+    slug = f"{name}-{_grp_counter[0]}"
+    with SessionLocal() as db:
+        grp = AccountGroup(name=slug, code=slug, enabled=True, daily_limit=1000)
+        db.add(grp); db.commit()
+        return grp.id
+
+
 class AccountsBatchApiTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
@@ -48,6 +64,7 @@ class AccountsBatchApiTestCase(unittest.TestCase):
         self.client.post(
             "/api/accounts/import-zip",
             files={"sessions": ("sessions.zip", zip_bytes, "application/zip")},
+            data={"group_id": str(_make_group())},
             headers=self.auth,
         )
 
@@ -265,8 +282,50 @@ class ImportZipFlatLayoutTestCase(unittest.TestCase):
         return self.client.post(
             "/api/accounts/import-zip",
             files={"sessions": ("sessions.zip", zip_bytes, "application/zip")},
+            data={"group_id": str(_make_group("flat"))},
             headers=self.auth,
         ).json()
+
+    def test_import_zip_requires_group_id(self) -> None:
+        # Operator must pick the target account group up front. Without
+        # one the upload returns 422 (FastAPI validation) and nothing is
+        # written. Verifies the behavior the UI dialog now enforces.
+        zip_bytes = _make_zip({"12792412211.session": b"x"})
+        r = self.client.post(
+            "/api/accounts/import-zip",
+            files={"sessions": ("sessions.zip", zip_bytes, "application/zip")},
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 422)
+        with SessionLocal() as db:
+            self.assertEqual(db.query(Account).count(), 0)
+
+    def test_import_zip_rejects_unknown_group_id(self) -> None:
+        zip_bytes = _make_zip({"12792412211.session": b"x"})
+        r = self.client.post(
+            "/api/accounts/import-zip",
+            files={"sessions": ("sessions.zip", zip_bytes, "application/zip")},
+            data={"group_id": "99999"},
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("不存在", r.json()["detail"])
+
+    def test_import_zip_places_account_in_chosen_group(self) -> None:
+        # Selected group is what new accounts join — verify the membership
+        # row points at it (not the legacy `未分组` default).
+        gid = _make_group("target")
+        zip_bytes = _make_zip({"12792412211.session": b"x"})
+        r = self.client.post(
+            "/api/accounts/import-zip",
+            files={"sessions": ("sessions.zip", zip_bytes, "application/zip")},
+            data={"group_id": str(gid)},
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        with SessionLocal() as db:
+            membership = db.query(AccountGroupMember).one()
+            self.assertEqual(membership.group_id, gid)
 
     def test_flat_layout_imported(self) -> None:
         body = self._upload({
@@ -404,6 +463,7 @@ class ImportZipTdataLayoutTestCase(unittest.TestCase):
             r = self.client.post(
                 "/api/accounts/import-zip",
                 files={"sessions": ("td.zip", zip_bytes, "application/zip")},
+                data={"group_id": str(_make_group("td"))},
                 headers=self.auth,
             )
         self.assertEqual(r.status_code, 200, r.text)
@@ -435,6 +495,7 @@ class ImportZipTdataLayoutTestCase(unittest.TestCase):
             r = self.client.post(
                 "/api/accounts/import-zip",
                 files={"sessions": ("td.zip", zip_bytes, "application/zip")},
+                data={"group_id": str(_make_group("td"))},
                 headers=self.auth,
             )
         self.assertEqual(r.status_code, 200, r.text)
@@ -463,6 +524,7 @@ class ImportZipTdataLayoutTestCase(unittest.TestCase):
             r = self.client.post(
                 "/api/accounts/import-zip",
                 files={"sessions": ("mixed.zip", _make_zip(entries), "application/zip")},
+                data={"group_id": str(_make_group("mixed"))},
                 headers=self.auth,
             )
         self.assertEqual(r.status_code, 200, r.text)
