@@ -331,18 +331,26 @@ function onUserCommand(cmd) {
 }
 
 async function loadStatus() {
+  // Cheap, never-fails endpoint = backend reachability. Dashboard
+  // aggregation is slow + heavy; failing it shouldn't flip the worker
+  // health badge to '检查中'. Fetch them independently.
   try {
-    const [{ data: hasAdmin }, { data: dash }] = await Promise.all([
-      http.get('/auth/has-admin'),
-      http.get('/statistics/dashboard'),
-    ])
+    const { data: hasAdmin } = await http.get('/auth/has-admin')
     status.has_admin = !!hasAdmin?.has_admin
-    status.accounts = dash?.accounts?.total ?? 0
-    status.customers = dash?.customers?.total ?? 0
-    // crude worker liveness: if we got dashboard, backend is reachable; assume workers up
     status.workersOk = true
   } catch (_) {
     status.workersOk = false
+    return
+  }
+  try {
+    const { data: dash } = await http.get('/statistics/dashboard')
+    // Tenants don't get an accounts section (TG inventory is back-office
+    // only) — fall back to '-' display in those views.
+    status.accounts = dash?.accounts?.total ?? null
+    status.customers = dash?.customers?.total ?? 0
+  } catch (_) {
+    // Dashboard failure is non-fatal for the badge — leave counts as
+    // whatever they were and don't toggle workersOk off.
   }
 }
 
