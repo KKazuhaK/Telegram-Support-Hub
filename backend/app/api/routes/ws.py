@@ -60,8 +60,21 @@ async def replies_stream(ws: WebSocket, token: str = "") -> None:
 
     try:
         user = _resolve_user(token)
-    except Exception:
-        logger.exception("WS /replies _resolve_user raised")
+    except Exception as exc:
+        # Token expiry is expected user behaviour (12h JWT TTL), not a
+        # backend incident — log one line, not a full traceback that
+        # spams the container output every reconnect attempt. Other
+        # decode failures (bad signature, malformed) get the traceback
+        # because they signal tampering or a deployment bug.
+        from jwt.exceptions import (
+            ExpiredSignatureError, InvalidTokenError,
+        )
+        if isinstance(exc, ExpiredSignatureError):
+            logger.warning("WS /replies token expired (suffix=...%s)", token[-12:])
+        elif isinstance(exc, InvalidTokenError):
+            logger.warning("WS /replies token invalid (%s)", type(exc).__name__)
+        else:
+            logger.exception("WS /replies _resolve_user raised")
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 

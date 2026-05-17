@@ -264,8 +264,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search, ChatLineSquare, ChatRound } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
+import { useRouter } from 'vue-router'
 
 const auth = useAuthStore()
+const router = useRouter()
 
 const customers = ref([])
 const accounts = ref([])
@@ -655,7 +657,21 @@ function connect() {
   const url = `${proto}://${window.location.host}/ws/replies?token=${encodeURIComponent(auth.token)}`
   try { ws = new WebSocket(url) } catch (_) { scheduleReconnect(); return }
   ws.onopen = () => { wsStatus.value = 'open'; reconnectAttempt = 0 }
-  ws.onclose = () => { wsStatus.value = 'closed'; scheduleReconnect() }
+  ws.onclose = (ev) => {
+    wsStatus.value = 'closed'
+    // 1008 = policy violation = backend rejected the token (expired
+    // / invalid / actor disabled). Reconnect would just 403 again and
+    // spam logs; force the auth store to clear so the router guard
+    // bounces the user to the login page on next navigation.
+    if (ev?.code === 1008) {
+      stopped = true
+      ElMessage.warning('登录已过期，请重新登录')
+      auth.logout()
+      router.push({ name: 'login' })
+      return
+    }
+    scheduleReconnect()
+  }
   ws.onerror = () => { wsStatus.value = 'error' }
   ws.onmessage = (msg) => {
     try {
