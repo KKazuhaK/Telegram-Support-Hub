@@ -80,7 +80,35 @@ def convert_tdata_zip_entry(zf: zipfile.ZipFile, stem: str) -> bytes:
             extracted += 1
         if extracted == 0:
             raise RuntimeError(f"未找到 {stem}/tdata/* 文件，zip 结构异常")
+        _add_legacy_filename_aliases(tmp_root / "tdata")
         return _run_conversion(tmp_root)
+
+
+def _add_legacy_filename_aliases(tdata_dir: Path) -> None:
+    """Newer Telegram Desktop writes session files with a trailing 's'
+    (`key_datas`, `<id>s`). opentele 1.15.x still looks them up under
+    the singular form (`key_data`, `<id>`) and raises
+    `TFileNotFound: Could not open key_data` on the new layout. Drop a
+    sibling copy under the singular name to satisfy both lookups.
+
+    Skipped when a directory of the same name already exists at that
+    path — that's a tdata account-data folder, not a candidate for the
+    file alias.
+    """
+    if not tdata_dir.is_dir():
+        return
+    for child in list(tdata_dir.iterdir()):
+        if not child.is_file():
+            continue
+        if not child.name.endswith("s"):
+            continue
+        legacy = child.with_name(child.name[:-1])
+        if legacy.exists():
+            continue
+        try:
+            legacy.write_bytes(child.read_bytes())
+        except OSError as exc:
+            logger.warning("failed to alias %s -> %s: %s", child.name, legacy.name, exc)
 
 
 def _run_conversion(tdata_parent: Path) -> bytes:
