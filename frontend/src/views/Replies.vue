@@ -19,7 +19,11 @@
       </div>
       <el-radio-group v-model="sidebarTab" size="small" class="sidebar-tabs" @change="onSidebarTabChange">
         <el-radio-button value="customer">客户</el-radio-button>
-        <el-radio-button value="orphan">
+        <!-- Orphan-threads is an admin-only diagnostic. Non-admins
+             (plain agents / business_agent / merchant) get a 403 from
+             /orphan-threads, which spams the error toast on every page
+             load — just hide the tab for them. -->
+        <el-radio-button v-if="auth.isAdmin" value="orphan">
           未匹配
           <el-badge v-if="orphans.length" :value="orphans.length" :max="99" />
         </el-radio-button>
@@ -440,6 +444,9 @@ async function loadHistory(customerId) {
 }
 
 async function loadOrphans() {
+  // Admin-only endpoint; skip silently for tenant/agent actors so the
+  // error toast doesn't fire on every mount.
+  if (!auth.isAdmin) return
   try {
     const { data } = await http.get('/orphan-threads')
     orphans.value = data || []
