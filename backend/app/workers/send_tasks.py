@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.app.core.config import settings
 from backend.app.core.database import SessionLocal
@@ -118,6 +118,23 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
             if account.daily_limit and account.sent_today >= account.daily_limit:
                 message.next_run_at = next_run_after_failure(now, view).isoformat()
                 continue
+
+            # Hourly throttle. Counts actually-sent rows in the last
+            # hour for this account — no extra column / no celery reset
+            # task to keep in sync. None means uncapped.
+            if account.hourly_limit:
+                from datetime import timedelta as _td
+                hour_ago = (now - _td(hours=1)).isoformat()
+                sent_last_hour = db.scalar(
+                    select(func.count(MessageRecord.id))
+                    .where(MessageRecord.account_id == account.id)
+                    .where(MessageRecord.direction == "outbound")
+                    .where(MessageRecord.sent_at.isnot(None))
+                    .where(MessageRecord.sent_at >= hour_ago)
+                ) or 0
+                if sent_last_hour >= account.hourly_limit:
+                    message.next_run_at = next_run_after_failure(now, view).isoformat()
+                    continue
 
             target = _resolve_target(message)
             if not target:

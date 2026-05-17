@@ -402,6 +402,76 @@ def cancel_campaign(campaign_id: int, db: DbSession, user: CurrentUserDep) -> di
     return to_dict(campaign)
 
 
+class PreflightPayload(BaseModel):
+    task_kind: str = "broadcast"
+    target_type: str = "customer_broadcast"
+    account_group_ids: list[int] = Field(default_factory=list)
+    customer_ids: list[int] | None = None
+    imported_targets_count: int = 0
+
+
+@router.post("/preflight")
+def preflight(payload: PreflightPayload, db: DbSession, user: CurrentUserDep) -> dict:
+    """Estimate eligible-account count + per-account average for a
+    pending broadcast, so the create dialog can warn before submit
+    when the per-account load is dangerously high (TG anti-spam +
+    PeerFloodError ground)."""
+    from backend.app.models.account import Account, AccountGroupMember
+
+    group_ids = _scope_groups(user, payload.account_group_ids)
+    # Eligible = enabled + active/imported + in the chosen groups.
+    eligible_accounts = 0
+    if group_ids:
+        member_subq = select(AccountGroupMember.account_id).where(
+            AccountGroupMember.group_id.in_(group_ids)
+        )
+        eligible_accounts = db.scalar(
+            select(func.count(Account.id))
+            .where(Account.enabled.is_(True))
+            .where(Account.status.in_(["active", "imported"]))
+            .where(Account.id.in_(member_subq))
+        ) or 0
+
+    # Estimate target count per task type. Customer/friend broadcasts
+    # count actual eligible rows; imported uses what the form passed.
+    target_count = 0
+    if payload.target_type == "imported_target_broadcast":
+        target_count = max(0, int(payload.imported_targets_count))
+    elif payload.target_type == "customer_broadcast":
+        q = select(func.count(Customer.id)).where(Customer.consent.is_(True))
+        if payload.customer_ids:
+            q = q.where(Customer.id.in_(payload.customer_ids))
+        target_count = db.scalar(q) or 0
+    elif payload.target_type == "friend_broadcast" and group_ids:
+        friend_member_subq = select(AccountGroupMember.account_id).where(
+            AccountGroupMember.group_id.in_(group_ids)
+        )
+        target_count = db.scalar(
+            select(func.count(Friend.id))
+            .where(Friend.account_id.in_(friend_member_subq))
+            .where(Friend.opted_out.is_(False))
+        ) or 0
+
+    per_account = (target_count / eligible_accounts) if eligible_accounts else None
+    # Heuristic thresholds: 15+ is yellow zone, 25+ is red zone. Tuned
+    # so a 1 day default daily_limit of 20 lines up with the red.
+    if per_account is None:
+        severity = "no_accounts"
+    elif per_account >= 25:
+        severity = "danger"
+    elif per_account >= 15:
+        severity = "warning"
+    else:
+        severity = "ok"
+
+    return {
+        "target_count": target_count,
+        "eligible_accounts": eligible_accounts,
+        "per_account_avg": round(per_account, 1) if per_account is not None else None,
+        "severity": severity,
+    }
+
+
 @router.get("/{campaign_id}/messages")
 def list_campaign_messages(campaign_id: int, db: DbSession, _: CurrentUserDep, limit: int = 100, offset: int = 0) -> list[dict]:
     rows = list(

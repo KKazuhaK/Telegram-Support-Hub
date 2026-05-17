@@ -1,0 +1,28 @@
+"""account_hourly_limit
+
+Adds optional per-account hourly send cap. Leaves existing rows'
+daily_limit alone — the default of 20 only applies to NEW accounts.
+
+Revision ID: c3d4e5f6a7b8
+Revises: b2c3d4e5f6a7
+Create Date: 2026-05-17 15:00:00.000000
+
+"""
+from __future__ import annotations
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = 'c3d4e5f6a7b8'
+down_revision = 'b2c3d4e5f6a7'
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.add_column('accounts', sa.Column('hourly_limit', sa.Integer(), nullable=True))
+
+
+def downgrade() -> None:
+    op.drop_column('accounts', 'hourly_limit')

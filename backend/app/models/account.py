@@ -15,7 +15,13 @@ class Account(Base, TimestampMixin):
     proxy_id: Mapped[int | None] = mapped_column(ForeignKey("proxy_endpoints.id"), index=True)
     status: Mapped[str] = mapped_column(String(32), default="imported", index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    daily_limit: Mapped[int] = mapped_column(Integer, default=40)
+    # Conservative defaults to protect freshly imported accounts: 20
+    # outbound/day, no hourly cap. Each account is editable in 账号管理
+    # so an operator can raise these for warmed-up accounts (typically
+    # 60-100/day, 10-20/hour) once the number has built history.
+    # hourly_limit=null disables the hourly check entirely.
+    daily_limit: Mapped[int] = mapped_column(Integer, default=20)
+    hourly_limit: Mapped[int | None] = mapped_column(Integer)
     sent_today: Mapped[int] = mapped_column(Integer, default=0)
     total_sent: Mapped[int] = mapped_column(Integer, default=0)
     total_replies: Mapped[int] = mapped_column(Integer, default=0)

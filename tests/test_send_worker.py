@@ -161,6 +161,38 @@ class SendWorkerTestCase(unittest.TestCase):
             self.assertIn(stored.status, {"queued", "retry"})
             self.assertIsNotNone(stored.next_run_at)
 
+    def test_hourly_limit_postpones_when_exceeded(self) -> None:
+        # Seeded account has daily_limit=10 and no hourly_limit. Set
+        # hourly_limit=2 and pre-stamp 2 sent rows in the last hour;
+        # the next dispatch tick should postpone instead of sending.
+        from datetime import UTC, datetime, timedelta
+        account, campaign, msg = _seed(self.db)
+        recent = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
+        with SessionLocal() as db:
+            acc = db.get(Account, account.id)
+            acc.hourly_limit = 2
+            for i in range(2):
+                db.add(MessageRecord(
+                    campaign_id=campaign.id, account_id=acc.id,
+                    target_tg_user_id=f"prev{i}", body_snapshot="x",
+                    direction="outbound", status="sent", sent_at=recent,
+                ))
+            db.commit()
+
+        def fake_send(*_a, **_kw):
+            return TelegramSendResult(ok=True, external_message_id="m", target_tg_user_id="t")
+
+        with patch.object(send_tasks, "_send_via_adapter", side_effect=fake_send), \
+             patch.object(send_tasks, "account_send_lock", lambda aid, ttl: _NopLock()):
+            result = send_tasks.dispatch_send_queue(limit=10)
+
+        # Send was NOT issued — postponed because hourly cap reached.
+        self.assertEqual(result["sent"], 0)
+        with SessionLocal() as db:
+            stored = db.get(MessageRecord, msg.id)
+            self.assertEqual(stored.status, "queued")
+            self.assertIsNotNone(stored.next_run_at)
+
     def test_peer_flood_error_kills_account_immediately(self) -> None:
         # Telegram's anti-spam flag. Continued sends escalate toward a
         # permaban, so the account must be disabled on the spot — no

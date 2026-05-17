@@ -100,6 +100,33 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="limitsDialog" title="账号发送限额" width="420px">
+      <el-form v-if="limitsTarget" label-width="100px">
+        <el-form-item label="账号">
+          <el-input :model-value="limitsTarget.phone || limitsTarget.tg_user_id" disabled />
+        </el-form-item>
+        <el-form-item label="日上限">
+          <el-input-number v-model="limitsForm.daily_limit" :min="0" :max="500"
+                           controls-position="right" style="width: 100%" />
+          <div class="muted" style="font-size:12px;">
+            新号建议 20，warming up 后可拉到 60-100。0 = 关闭限制（不推荐）。
+          </div>
+        </el-form-item>
+        <el-form-item label="时上限">
+          <el-input-number v-model="limitsForm.hourly_limit" :min="0" :max="200"
+                           controls-position="right" style="width: 100%"
+                           placeholder="不限" />
+          <div class="muted" style="font-size:12px;">
+            可选。留空 / 0 = 不限。建议 10-20 防止短时间集中发送。
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="limitsDialog = false">取消</el-button>
+        <el-button type="primary" :loading="savingLimits" @click="saveLimits">保存</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="importDialog" title="上传 session ZIP" width="480px">
       <el-form label-width="100px">
         <el-form-item label="目标分组" required>
@@ -169,6 +196,9 @@
         </template>
       </el-table-column>
       <el-table-column prop="daily_limit" label="日上限" width="90" />
+      <el-table-column label="时上限" width="90">
+        <template #default="{ row }">{{ row.hourly_limit ?? '—' }}</template>
+      </el-table-column>
       <el-table-column prop="sent_today" label="今日已发" width="100" />
       <el-table-column prop="total_sent" label="累计发送" width="100" />
       <el-table-column prop="total_replies" label="累计回复" width="100" />
@@ -179,6 +209,7 @@
       <el-table-column label="操作" width="320" v-if="auth.isAdmin">
         <template #default="{ row }">
           <el-button size="small" link :loading="row._validating" @click="validateNow(row)">验证</el-button>
+          <el-button size="small" link @click="openLimitsDialog(row)">限额</el-button>
           <el-button size="small" link @click="openTestSend(row)">测试发送</el-button>
           <el-button size="small" link @click="autoBindProxy(row)">自动代理</el-button>
           <el-popconfirm title="确认解绑代理？" @confirm="unbindProxy(row)">
@@ -390,6 +421,33 @@ function onStatusTabChange() {
 
 const importDialog = ref(false)
 const importGroupId = ref(null)
+
+const limitsDialog = ref(false)
+const limitsTarget = ref(null)
+const limitsForm = reactive({ daily_limit: 20, hourly_limit: 0 })
+const savingLimits = ref(false)
+
+function openLimitsDialog(row) {
+  limitsTarget.value = row
+  limitsForm.daily_limit = row.daily_limit ?? 20
+  // null in DB → 0 in the input means "uncapped"; we coerce back on save.
+  limitsForm.hourly_limit = row.hourly_limit ?? 0
+  limitsDialog.value = true
+}
+
+async function saveLimits() {
+  if (!limitsTarget.value) return
+  savingLimits.value = true
+  try {
+    await http.patch(`/accounts/${limitsTarget.value.id}`, {
+      daily_limit: limitsForm.daily_limit,
+      hourly_limit: limitsForm.hourly_limit > 0 ? limitsForm.hourly_limit : null,
+    })
+    ElMessage.success('已保存')
+    limitsDialog.value = false
+    await load()
+  } finally { savingLimits.value = false }
+}
 
 async function openImportDialog() {
   // Pre-load groups so the dropdown is populated when the dialog opens.

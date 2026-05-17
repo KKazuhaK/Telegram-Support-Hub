@@ -127,6 +127,30 @@
           <span style="margin: 0 8px">~</span>
           <el-input v-model="form.send_settings.quiet_hours_end" placeholder="09:00" style="width: 110px" />
         </el-form-item>
+
+        <!-- Live pre-flight: estimates per-account load and warns when
+             the planned broadcast risks tripping TG anti-spam. Polled
+             on form change with a small debounce. -->
+        <el-alert v-if="preflight && preflight.severity !== 'ok'"
+                  :type="alertType(preflight.severity)"
+                  :title="preflightTitle"
+                  show-icon :closable="false"
+                  style="margin-top: 8px;">
+          <div style="font-size:12px;line-height:1.6;">
+            目标 <b>{{ preflight.target_count }}</b> · 可用号
+            <b>{{ preflight.eligible_accounts }}</b> · 平均
+            <b>{{ preflight.per_account_avg ?? '—' }}</b> 条/号。
+            <span v-if="preflight.severity === 'danger'">
+              超过 25 条/号风险极高（PeerFloodError 概率大）。建议把号加到分组里、或拆成多次小批群发。
+            </span>
+            <span v-else-if="preflight.severity === 'warning'">
+              15-25 条/号属于黄色区，新号慎用。建议确认目标号都是 warming up 过的老号。
+            </span>
+            <span v-else-if="preflight.severity === 'no_accounts'">
+              所选分组里没有可用号（enabled + active/imported），任务会立即结束。
+            </span>
+          </div>
+        </el-alert>
       </el-form>
 
       <div class="dialog-help">
@@ -177,7 +201,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   InfoFilled, Timer, Histogram, Warning, CircleCheck,
@@ -209,6 +233,55 @@ const defaultForm = () => ({
   },
 })
 const form = reactive(defaultForm())
+
+const preflight = ref(null)
+const alertType = (sev) => (
+  sev === 'danger' ? 'error' :
+  sev === 'warning' ? 'warning' :
+  sev === 'no_accounts' ? 'info' : 'info'
+)
+const preflightTitle = computed(() => {
+  const s = preflight.value?.severity
+  if (s === 'danger') return '⚠️ 风险极高：人均派送过多，可能触发 PeerFloodError 导致账号被限'
+  if (s === 'warning') return '建议确认：人均派送较高'
+  if (s === 'no_accounts') return '没有可用账号'
+  return ''
+})
+
+let _preflightTimer = null
+async function runPreflight() {
+  // Only the broadcast family has eligibility math worth showing.
+  if (form.task_kind && form.task_kind !== 'broadcast') {
+    preflight.value = null
+    return
+  }
+  if (!form.account_group_ids.length) {
+    preflight.value = null
+    return
+  }
+  try {
+    const { data } = await http.post('/campaigns/preflight', {
+      task_kind: 'broadcast',
+      target_type: form.target_type,
+      account_group_ids: form.account_group_ids,
+      imported_targets_count: form.target_type === 'imported_target_broadcast'
+        ? importedTargetsText.value.split('\n').filter((l) => l.trim()).length
+        : 0,
+    })
+    preflight.value = data
+  } catch (_) { preflight.value = null }
+}
+
+watch([
+  () => form.target_type,
+  () => form.account_group_ids,
+  () => importedTargetsText.value,
+], () => {
+  // Debounce so each keystroke in the targets textarea doesn't hammer
+  // the backend. 300ms feels responsive without being noisy.
+  if (_preflightTimer) clearTimeout(_preflightTimer)
+  _preflightTimer = setTimeout(runPreflight, 300)
+}, { deep: true })
 
 async function load() {
   loading.value = true

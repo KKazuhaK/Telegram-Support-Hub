@@ -31,6 +31,10 @@ class AccountUpdate(BaseModel):
     enabled: bool | None = None
     status: str | None = None
     daily_limit: int | None = None
+    # null clears the hourly cap (uncapped). Use Field with explicit
+    # default + JSON nullability via the dedicated type so pydantic
+    # distinguishes "not provided" from "explicitly set to null".
+    hourly_limit: int | None = None
     phone: str | None = None
     nickname: str | None = None
     country: str | None = None
