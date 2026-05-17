@@ -552,6 +552,20 @@ async function runStandaloneTranslate() {
 
 async function translateMessage(m) {
   if (m._translating || m.translation) return
+  // Per-message translate-cache endpoint is keyed on customer_id —
+  // orphan threads don't have one yet. Use the stateless /translate
+  // endpoint instead; result lives only on this UI session.
+  if (selected.value?.kind === 'orphan') {
+    m._translating = true
+    try {
+      const { data } = await http.post('/translate', { text: m.body_snapshot })
+      m.translation = data.translated_text
+      m._collapsed = false
+    } catch (_) {} finally {
+      m._translating = false
+    }
+    return
+  }
   m._translating = true
   try {
     // Per-message cache endpoint: server translates + persists to the

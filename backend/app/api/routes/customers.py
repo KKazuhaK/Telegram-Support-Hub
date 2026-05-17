@@ -307,9 +307,21 @@ def send_customer_message(
     # calls resolve_target() internally to look up the Telegram entity.
     # Pass account positionally to avoid kwarg-vs-bound-self collision
     # when tests substitute a stub class attribute.
+    # Special case: customers promoted from an orphan thread without a
+    # real phone get `tg:<numeric_id>` as a placeholder. Strip the
+    # prefix and pass the numeric id to Telethon — it resolves bare
+    # numeric ids via get_entity directly. Sending the literal
+    # 'tg:7332000121' fails with 'Cannot find any entity corresponding'.
+    send_target = cust.phone
+    if send_target and send_target.startswith("tg:"):
+        send_target = send_target[3:]
+        try:
+            send_target = int(send_target)
+        except ValueError:
+            pass  # keep as string; Telethon may still resolve it
     try:
         result = asyncio.run(adapter.send_message(
-            account, cust.phone, text, proxy=proxy,
+            account, send_target, text, proxy=proxy,
         ))
     except Exception as exc:  # noqa: BLE001 — surface to operator below
         record.status = "failed"
