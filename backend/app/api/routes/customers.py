@@ -52,6 +52,7 @@ class CustomerUpdate(BaseModel):
     consent: bool | None = None
     status: str | None = None
     assigned_account_id: int | None = None
+    notes: str | None = None
 
 
 def _scope_accounts_to_user(db, user, account_group_ids: list[int] | None) -> list[int] | None:

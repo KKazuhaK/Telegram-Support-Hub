@@ -24,6 +24,10 @@ class Customer(Base, TimestampMixin):
     # (e.g. 'en', 'ru'). Used by the chat UI to translate operator drafts
     # back to the customer's language before send.
     last_source_lang: Mapped[str | None] = mapped_column(String(16))
+    # Free-form 客户备注 — anything the operator wants to remember about
+    # this contact (lead source, follow-up plan, internal id, etc.).
+    # Editable from the chat panel's 客户信息 drawer.
+    notes: Mapped[str | None] = mapped_column(Text)
     merchant_id: Mapped[int | None] = mapped_column(ForeignKey("merchants.id"), index=True)
 
 

@@ -154,6 +154,21 @@ class CustomerEditApiTestCase(unittest.TestCase):
         # phone is immutable since it's the dedup key
         self.assertEqual(body["phone"], "+8613800000001")
 
+    def test_patch_persists_notes_field(self) -> None:
+        # Chat panel's 客户信息 drawer edits this. Plain text round-trip.
+        resp = self.client.patch(
+            f"/api/customers/{self.customer_id}",
+            json={"notes": "高意向，周三回访\n备注第二行"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["notes"], "高意向，周三回访\n备注第二行")
+        with SessionLocal() as db:
+            self.assertEqual(
+                db.get(Customer, self.customer_id).notes,
+                "高意向，周三回访\n备注第二行",
+            )
+
     def test_patch_phone_is_ignored(self) -> None:
         resp = self.client.patch(
             f"/api/customers/{self.customer_id}",

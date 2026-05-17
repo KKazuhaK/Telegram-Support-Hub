@@ -91,12 +91,21 @@
           <div class="title">{{ headerTitle }}</div>
           <div class="sub">{{ headerSub }}</div>
         </div>
-        <el-button
-          v-if="selected.kind === 'orphan'"
-          type="primary"
-          size="small"
-          @click="promoteOrphan(selected)"
-        >转为客户</el-button>
+        <div class="head-actions">
+          <el-button
+            v-if="selected.kind === 'customer'"
+            size="small"
+            @click="openCustomerInfoDrawer"
+          >
+            <el-icon><User /></el-icon>&nbsp;客户信息
+          </el-button>
+          <el-button
+            v-if="selected.kind === 'orphan'"
+            type="primary"
+            size="small"
+            @click="promoteOrphan(selected)"
+          >转为客户</el-button>
+        </div>
       </header>
 
       <el-scrollbar ref="historyScroll" class="chat-history">
@@ -244,6 +253,46 @@
       @close="imagePreview.visible = false"
     />
 
+    <!-- 客户信息 drawer — quick-edit name/tags/status/consent and a
+         free-form 备注 (notes) field for whatever the operator wants
+         to remember about this contact. -->
+    <el-drawer v-model="customerInfoDrawer" title="客户信息" size="380px" direction="rtl">
+      <el-form v-if="customerInfo" label-width="80px" size="small">
+        <el-form-item label="手机号">
+          <el-input :model-value="customerInfo.phone" disabled />
+        </el-form-item>
+        <el-form-item label="姓名">
+          <el-input v-model="customerInfo.name" placeholder="（未填）" />
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-input :model-value="customerInfo.status" disabled />
+        </el-form-item>
+        <el-form-item label="授权">
+          <el-checkbox v-model="customerInfo.consent">consent=true（允许群发）</el-checkbox>
+        </el-form-item>
+        <el-form-item label="来源">
+          <el-input :model-value="customerInfo.source || '—'" disabled />
+        </el-form-item>
+        <el-form-item label="标签">
+          <el-select v-model="customerInfo.tags" multiple filterable allow-create
+                     placeholder="敲回车添加，多个标签" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="customerInfo.notes" type="textarea" :rows="6"
+                    placeholder="跟进进度 / 内部备注，仅 admin 可见" />
+        </el-form-item>
+        <el-form-item label="最近回复">
+          <el-input :model-value="customerInfo.last_reply_at || '—'" disabled />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="customerInfoDrawer = false">取消</el-button>
+        <el-button type="primary" :loading="savingCustomerInfo" @click="saveCustomerInfo">
+          保存
+        </el-button>
+      </template>
+    </el-drawer>
+
     <!-- Quick-reply (话术) drawer — pick a saved script to insert into the input. -->
     <el-drawer v-model="quickReplyDrawer" title="话术" size="420px">
       <el-tabs v-model="quickReplyTab">
@@ -297,7 +346,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Search, ChatLineSquare, ChatRound, Picture } from '@element-plus/icons-vue'
+import { Refresh, Search, ChatLineSquare, ChatRound, Picture, User } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
@@ -645,6 +694,55 @@ async function autoTranslatePendingInbound() {
 
 const imagePreview = ref({ visible: false, url: '' })
 
+const customerInfoDrawer = ref(false)
+const customerInfo = ref(null)
+const savingCustomerInfo = ref(false)
+
+async function openCustomerInfoDrawer() {
+  if (selected.value?.kind !== 'customer') return
+  // Pull latest from the list (fall back to a refetch if missing).
+  let row = customers.value.find((c) => c.id === selected.value.id)
+  if (!row) {
+    try {
+      const { data } = await http.get('/customers', { params: { limit: 200 } })
+      customers.value = data || []
+      row = customers.value.find((c) => c.id === selected.value.id)
+    } catch (_) { /* toast already fired */ }
+  }
+  if (!row) return
+  // Clone so cancel doesn't mutate the list.
+  customerInfo.value = {
+    id: row.id, phone: row.phone, name: row.name || '',
+    status: row.status, consent: !!row.consent,
+    source: row.source, tags: [...(row.tags || [])],
+    notes: row.notes || '', last_reply_at: row.last_reply_at,
+  }
+  customerInfoDrawer.value = true
+}
+
+async function saveCustomerInfo() {
+  if (!customerInfo.value) return
+  savingCustomerInfo.value = true
+  try {
+    const payload = {
+      name: customerInfo.value.name,
+      tags: customerInfo.value.tags,
+      consent: customerInfo.value.consent,
+      notes: customerInfo.value.notes,
+    }
+    const { data } = await http.patch(
+      `/customers/${customerInfo.value.id}`, payload,
+    )
+    // Reflect into the sidebar list so a refresh isn't required.
+    const idx = customers.value.findIndex((c) => c.id === data.id)
+    if (idx >= 0) customers.value[idx] = { ...customers.value[idx], ...data }
+    ElMessage.success('已保存')
+    customerInfoDrawer.value = false
+  } finally {
+    savingCustomerInfo.value = false
+  }
+}
+
 function ensureImage(m) {
   // Called from template; side-effect: lazy-fetches the attachment
   // through the auth'd /api endpoint into a blob URL cached on the row.
@@ -988,4 +1086,5 @@ onBeforeUnmount(() => { stopped = true; tearDownWs() })
   border-radius: 6px; cursor: zoom-in; margin-bottom: 4px;
 }
 .bubble .muted { font-size: 12px; color: #909399; padding: 4px 0; }
+.head-actions { display: flex; gap: 6px; align-items: center; }
 </style>
