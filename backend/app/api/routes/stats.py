@@ -322,6 +322,12 @@ def per_agent_stats(db: DbSession, _: CurrentUserDep) -> list[dict]:
         today_replied = sum(replied_by_acc.get(a, 0) for a in acc_ids)
         today_read = sum(read_by_acc.get(a, 0) for a in acc_ids)
         out.append({
+            # `id` mirrors the standard resource-list convention used
+            # everywhere else; the front-end (Agents.vue) reads row.id
+            # for edit / permission / batch-delete URLs. `agent_id` is
+            # kept for back-compat with any consumer that already
+            # depended on the named field.
+            "id": agent.id,
             "agent_id": agent.id,
             "username": agent.username,
             "nickname": agent.nickname,

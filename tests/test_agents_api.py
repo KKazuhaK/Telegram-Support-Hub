@@ -97,6 +97,18 @@ class AgentStatsTodayTestCase(unittest.TestCase):
         for r in rows:
             self.assertIn("today_sent", r)
 
+    def test_per_agent_stats_exposes_id_for_resource_urls(self) -> None:
+        # Front-end Agents.vue builds /support-agents/{row.id}/...
+        # URLs from this response; missing `id` makes every edit /
+        # permission / batch-delete request 422 with int_parsing on the
+        # path param. Keep both `id` and the legacy `agent_id`.
+        rows = self.client.get("/api/statistics/support-agents", headers=self.auth).json()
+        self.assertTrue(rows)
+        for r in rows:
+            self.assertIn("id", r)
+            self.assertIsInstance(r["id"], int)
+            self.assertEqual(r["id"], r["agent_id"])
+
 
 class AgentBatchApiTestCase(unittest.TestCase):
     def setUp(self) -> None:
