@@ -118,10 +118,15 @@ def _run_conversion(tdata_parent: Path) -> bytes:
     from opentele.td import TDesktop
     from opentele.api import UseCurrentSession, API
 
+    # opentele wants the path TO the tdata folder, not its parent —
+    # despite the constructor name. Passing the parent makes it look
+    # for key_data / D877.../maps directly in the parent, which fails
+    # immediately with TFileNotFound.
+    tdata_dir = tdata_parent / "tdata"
     out_path = tdata_parent / "out.session"
 
     async def _do() -> bytes:
-        tdesk = TDesktop(str(tdata_parent))
+        tdesk = TDesktop(str(tdata_dir))
         if not tdesk.isLoaded():
             raise RuntimeError("tdata 解析失败：不是有效的 Telegram Desktop 会话数据")
         client = await tdesk.ToTelethon(
