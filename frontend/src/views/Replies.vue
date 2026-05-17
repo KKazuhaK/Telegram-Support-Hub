@@ -119,7 +119,7 @@
               {{ m.translation }}
             </div>
             <div class="bubble-meta">
-              <span>{{ formatTs(m.created_at) }}</span>
+              <span>{{ formatTs(m.sent_at || m.created_at) }}</span>
               <span v-if="m.direction === 'outbound'" class="status">
                 {{ statusLabel(m.status) }}
               </span>
@@ -659,9 +659,15 @@ function connect() {
 }
 
 function handleIncoming(payload) {
-  // Match the affected customer by phone; bump it to the top + mark unread.
+  // Match the affected customer by phone first; fall back to the
+  // `tg:<id>` placeholder phone used by promoted-from-orphan customers
+  // (whose real phone is null in the WS payload).
   const phone = payload.phone
-  const c = phone ? customers.value.find((c) => c.phone === phone) : null
+  const placeholder = payload.tg_user_id ? `tg:${payload.tg_user_id}` : null
+  let c = phone ? customers.value.find((c) => c.phone === phone) : null
+  if (!c && placeholder) {
+    c = customers.value.find((cust) => cust.phone === placeholder)
+  }
   if (c) {
     c.last_reply_at = payload.received_at || new Date().toISOString()
     c.last_reply_text = payload.text
@@ -673,7 +679,7 @@ function handleIncoming(payload) {
       const tb = (b.last_reply_at || b.last_message_at || '')
       return tb.localeCompare(ta)
     })
-    if (selected.value?.kind === 'customer' && selected.value.phone === phone) {
+    if (selected.value?.kind === 'customer' && selected.value.id === c.id) {
       loadHistoryForCurrent()
     }
   } else {

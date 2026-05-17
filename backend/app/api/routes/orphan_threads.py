@@ -153,7 +153,11 @@ def list_orphan_messages(
         stmt = stmt.where(MessageRecord.target_tg_user_id == target_tg_user_id)
     if phone:
         stmt = stmt.where(MessageRecord.phone == phone)
-    stmt = stmt.order_by(MessageRecord.created_at.asc(), MessageRecord.id.asc())
+    # Order by actual Telegram message time (sent_at), not the persistence
+    # time — listen_worker reconnect bursts give nearly-identical
+    # created_at and would jumble the chronological view.
+    order_key = func.coalesce(MessageRecord.sent_at, MessageRecord.created_at)
+    stmt = stmt.order_by(order_key.asc(), MessageRecord.id.asc())
     rows = list(db.scalars(stmt.offset(offset).limit(limit)))
     return list_dict(rows)
 

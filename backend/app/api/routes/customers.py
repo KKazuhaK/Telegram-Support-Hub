@@ -233,15 +233,19 @@ def list_customer_messages(
     customer_id: int, db: DbSession, user: CurrentUserDep,
     limit: int = 200, offset: int = 0,
 ) -> list[dict]:
-    """Conversation history (both directions) for a customer, ordered by
-    created_at ascending so the UI can append-from-bottom naturally."""
+    """Conversation history (both directions) for a customer. Ordered by
+    sent_at (the real Telegram message time) — created_at is the row's
+    persistence time, which clumps together when the listen_worker
+    reconnects and burst-catches-up a backlog."""
+    from sqlalchemy import func as _func
     cust = db.get(Customer, customer_id)
     if not cust or not can_access_row(user, db, cust):
         raise HTTPException(status_code=404, detail="客户不存在")
+    order_key = _func.coalesce(MessageRecord.sent_at, MessageRecord.created_at)
     stmt = (
         select(MessageRecord)
         .where(MessageRecord.customer_id == customer_id)
-        .order_by(MessageRecord.created_at.asc(), MessageRecord.id.asc())
+        .order_by(order_key.asc(), MessageRecord.id.asc())
         .offset(offset).limit(limit)
     )
     return list_dict(list(db.scalars(stmt)))

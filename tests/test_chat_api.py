@@ -180,6 +180,39 @@ class CustomerChatTestCase(unittest.TestCase):
              ("outbound", "how are u"), ("inbound", "good")],
         )
 
+    def test_get_messages_orders_by_sent_at_not_created_at(self) -> None:
+        # Simulates a listen_worker reconnect burst: real Telegram send
+        # times (sent_at) are 1s apart but DB persistence (created_at)
+        # is reversed because the catch-up landed them in inverse order.
+        # The endpoint must order by sent_at so the chronological view
+        # matches what the user actually sent.
+        from datetime import UTC, datetime, timedelta
+        sent_base = datetime(2026, 5, 16, 20, 30, tzinfo=UTC)
+        persist_base = datetime(2026, 5, 16, 21, 5, tzinfo=UTC)
+        texts = ["one", "two", "three"]
+        # Inverse persistence order: 'three' lands first, 'one' last.
+        for i, text in enumerate(texts):
+            rec = MessageRecord(
+                account_id=self.account_id,
+                customer_id=self.customer_id,
+                phone="+19990001111",
+                body_snapshot=text,
+                direction="inbound",
+                status="received",
+                sent_at=(sent_base + timedelta(minutes=i)).isoformat(),
+            )
+            rec.created_at = persist_base + timedelta(seconds=len(texts) - i)
+            self.db.add(rec)
+        self.db.commit()
+
+        r = client.get(
+            f"/api/customers/{self.customer_id}/messages",
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        rows = r.json()
+        self.assertEqual([row["body_snapshot"] for row in rows], texts)
+
     def test_post_message_rejects_empty_text(self) -> None:
         r = client.post(
             f"/api/customers/{self.customer_id}/messages",
