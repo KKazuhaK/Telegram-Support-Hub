@@ -635,6 +635,81 @@ def test_send(
     return to_dict(record)
 
 
+@router.post("/{account_id}/validate")
+def validate_now(account_id: int, db: DbSession, admin: AdminDep) -> dict:
+    """Synchronously validate a single account's session. Updates
+    `status` / `last_login_at` / `last_error` and promotes any
+    `pending:<phone>` placeholder to the real numeric tg_user_id
+    just like the periodic validate_all_sessions beat task does.
+
+    Returns {ok, status, tg_user_id, error_message} for the UI to
+    display immediately. Admin-only.
+    """
+    account = db.get(Account, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="TG 账号不存在")
+
+    proxy = db.get(ProxyEndpoint, account.proxy_id) if account.proxy_id else None
+
+    # Late import + isolated function so worker tests can patch
+    # account_tasks.get_adapter without us bypassing them via a direct
+    # backend.app.telegram.adapter import here.
+    from backend.app.workers import account_tasks
+    from datetime import UTC, datetime as _dt
+
+    adapter = account_tasks.get_adapter()
+    if not getattr(adapter, "configured", False):
+        raise HTTPException(
+            status_code=502,
+            detail="Telegram adapter 未配置（TELEGRAM_API_ID / API_HASH 未设置或 telethon 未安装）",
+        )
+
+    try:
+        result = asyncio.run(adapter.validate_session(account, proxy))
+    except Exception as exc:  # noqa: BLE001 — surface to admin
+        account.status = "error"
+        account.last_error = str(exc)[:500]
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"验证失败：{exc}") from exc
+
+    if result.ok:
+        account.status = "active"
+        account.last_login_at = _dt.now(UTC).isoformat()
+        account.last_error = None
+        if (
+            result.tg_user_id
+            and account.tg_user_id
+            and account.tg_user_id.startswith("pending:")
+        ):
+            account.tg_user_id = result.tg_user_id
+    else:
+        account.status = "error"
+        account.last_error = result.error_message or result.error_code
+
+    write_audit(db, actor=admin, action="account.validate_now",
+                target_type="account", target_id=account.id,
+                detail={"ok": result.ok, "error_code": result.error_code})
+    db.commit()
+    db.refresh(account)
+    return {
+        "ok": result.ok,
+        "status": account.status,
+        "tg_user_id": account.tg_user_id,
+        "error_message": result.error_message,
+        "error_code": result.error_code,
+    }
+
+
+@router.post("/validate-all")
+def validate_all_now(_admin: AdminDep) -> dict:
+    """Trigger the validate-all-sessions beat task right now instead of
+    waiting for the next 15-minute tick. Returns the Celery task id.
+    Useful right after a bulk import."""
+    from backend.app.workers.account_tasks import validate_all_sessions
+    task = validate_all_sessions.delay()
+    return {"task_id": task.id}
+
+
 @router.delete("/{account_id}/proxy")
 def unbind_proxy(account_id: int, db: DbSession, admin: AdminDep) -> dict:
     account = db.get(Account, account_id)

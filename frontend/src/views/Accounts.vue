@@ -36,6 +36,7 @@
         <el-button :disabled="!selectedIds.length" @click="batchStatus('archived')">归档</el-button>
         <el-button :disabled="!selectedIds.length" type="danger" @click="batchDelete">批量删除</el-button>
       </el-button-group>
+      <el-button v-if="auth.isAdmin" :loading="validateAllBusy" @click="validateAll">立即验证全部</el-button>
       <el-dropdown v-if="auth.isAdmin" :disabled="!selectedIds.length" @command="onMoreCommand">
         <el-button :disabled="!selectedIds.length">
           更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
@@ -154,8 +155,9 @@
         <template #default="{ row }">{{ row.proxy_id || '未绑定' }}</template>
       </el-table-column>
       <el-table-column prop="last_login_at" label="最近登录" width="170" />
-      <el-table-column label="操作" width="240" v-if="auth.isAdmin">
+      <el-table-column label="操作" width="320" v-if="auth.isAdmin">
         <template #default="{ row }">
+          <el-button size="small" link :loading="row._validating" @click="validateNow(row)">验证</el-button>
           <el-button size="small" link @click="openTestSend(row)">测试发送</el-button>
           <el-button size="small" link @click="autoBindProxy(row)">自动代理</el-button>
           <el-popconfirm title="确认解绑代理？" @confirm="unbindProxy(row)">
@@ -436,6 +438,38 @@ async function autoBindProxy(row) {
 async function unbindProxy(row) {
   await http.delete(`/accounts/${row.id}/proxy`)
   await load()
+}
+
+// --- validate now ---
+const validateAllBusy = ref(false)
+
+async function validateNow(row) {
+  row._validating = true
+  try {
+    const { data } = await http.post(`/accounts/${row.id}/validate`)
+    if (data.ok) {
+      ElMessage.success(`账号 #${row.id} 验证成功，状态：${data.status}`)
+    } else {
+      ElMessage.error(`账号 #${row.id} 验证失败：${data.error_message || data.error_code}`)
+    }
+    await load()
+  } catch (_) {
+    // http.js already toasted
+  } finally {
+    row._validating = false
+  }
+}
+
+async function validateAll() {
+  validateAllBusy.value = true
+  try {
+    await http.post('/accounts/validate-all')
+    ElMessage.success('已派发验证任务，几秒后刷新查看结果')
+    // Refresh after a short delay so worker has time to start updating rows.
+    setTimeout(() => load(), 3000)
+  } finally {
+    validateAllBusy.value = false
+  }
 }
 
 // --- test send (admin smoke test) ---
