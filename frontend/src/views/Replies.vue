@@ -111,10 +111,27 @@
           :class="m.direction === 'outbound' ? 'out' : 'in'"
         >
           <div class="bubble">
+            <!-- Image attachment (outbound chat-uploads). The backend
+                 endpoint requires auth, so we lazy-fetch the blob via
+                 axios and cache an objectURL on the row (m._imgUrl).
+                 ensureImage() kicks off the fetch the first time the
+                 row is rendered. -->
+            <template v-if="m.attachment_path && (m.attachment_mime || '').startsWith('image/')">
+              {{ ensureImage(m) }}
+              <img
+                v-if="m._imgUrl"
+                :src="m._imgUrl"
+                class="bubble-image"
+                @click="previewImage(m)"
+                alt="image"
+              />
+              <div v-else class="muted">图片加载中…</div>
+            </template>
             <!-- Original (whatever was actually sent / received). For
                  outbound auto-translated messages this is the foreign-
                  language text the customer sees. -->
-            <div class="text">{{ m.body_snapshot }}</div>
+            <div v-if="!m.attachment_path || (m.body_snapshot && m.body_snapshot !== '[图片]')"
+                 class="text">{{ m.body_snapshot }}</div>
             <!-- Translation (cached on the row, populated by either the
                  auto-translate-on-receive flow or the send-side
                  auto-translate that stored the original Chinese). Hidden
@@ -192,14 +209,25 @@
             placeholder="输入消息内容，Ctrl+Enter 发送"
             @keydown.enter.ctrl.exact="send"
           />
-          <el-button
-            type="primary"
-            :loading="sending"
-            :disabled="!draft.trim() || !sendAccountId"
-            @click="send"
-          >
-            发送
-          </el-button>
+          <div class="input-actions">
+            <!-- Hidden file input wired to the picture button. Stays
+                 hidden so we control the styling via el-button. -->
+            <input ref="fileInput" type="file" accept="image/*"
+                   style="display:none" @change="onPickImage" />
+            <el-button
+              :disabled="!sendAccountId || sending"
+              :loading="uploadingImage"
+              @click="fileInput?.click()">
+              <el-icon><Picture /></el-icon>&nbsp;图片
+            </el-button>
+            <el-button
+              type="primary"
+              :loading="sending"
+              :disabled="!draft.trim() || !sendAccountId"
+              @click="send">
+              发送
+            </el-button>
+          </div>
         </div>
       </footer>
     </section>
@@ -207,6 +235,14 @@
     <section v-else class="chat-main empty-state">
       <el-empty description="选择一位客户开始对话" />
     </section>
+
+    <!-- Lightbox for full-size image preview. v-model lets clicks on
+         the overlay close it. -->
+    <el-image-viewer
+      v-if="imagePreview.visible"
+      :url-list="[imagePreview.url]"
+      @close="imagePreview.visible = false"
+    />
 
     <!-- Quick-reply (话术) drawer — pick a saved script to insert into the input. -->
     <el-drawer v-model="quickReplyDrawer" title="话术" size="420px">
@@ -261,7 +297,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Search, ChatLineSquare, ChatRound } from '@element-plus/icons-vue'
+import { Refresh, Search, ChatLineSquare, ChatRound, Picture } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
@@ -280,6 +316,8 @@ const history = ref([])
 const historyLoading = ref(false)
 const sending = ref(false)
 const draft = ref('')
+const fileInput = ref(null)
+const uploadingImage = ref(false)
 const sendAccountId = ref(null)
 const search = ref('')
 const wsStatus = ref('connecting')
@@ -605,6 +643,66 @@ async function autoTranslatePendingInbound() {
   }
 }
 
+const imagePreview = ref({ visible: false, url: '' })
+
+function ensureImage(m) {
+  // Called from template; side-effect: lazy-fetches the attachment
+  // through the auth'd /api endpoint into a blob URL cached on the row.
+  // Returns nothing so {{ ensureImage(m) }} renders empty.
+  if (m._imgUrl || m._imgFetching) return
+  m._imgFetching = true
+  const cid = selected.value?.id
+  http.get(`/customers/${cid}/messages/${m.id}/attachment`, { responseType: 'blob' })
+    .then((res) => { m._imgUrl = URL.createObjectURL(res.data) })
+    .catch(() => { m._imgUrl = '' })
+    .finally(() => { m._imgFetching = false })
+}
+
+function previewImage(m) {
+  if (!m._imgUrl) return
+  imagePreview.value = { visible: true, url: m._imgUrl }
+}
+
+async function onPickImage(e) {
+  const file = e.target.files?.[0]
+  e.target.value = ''  // allow re-selecting the same file
+  if (!file) return
+  if (!selected.value || !sendAccountId.value) return
+  if (selected.value.kind === 'orphan') {
+    ElMessage.warning('对方还不是客户，请先点「转为客户」再回复。')
+    return
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    ElMessage.warning('图片不能超过 10MB')
+    return
+  }
+  uploadingImage.value = true
+  try {
+    const fd = new FormData()
+    fd.append('account_id', String(sendAccountId.value))
+    fd.append('caption', draft.value.trim())
+    fd.append('file', file)
+    const { data } = await http.post(
+      `/customers/${selected.value.id}/messages/file`, fd,
+      { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60000 },
+    )
+    history.value.push(data)
+    draft.value = ''
+    await nextTick()
+    scrollToBottom()
+    selected.value.last_message_at = data.created_at
+    customers.value = customers.value.slice().sort((a, b) => {
+      const ta = (a.last_reply_at || a.last_message_at || '')
+      const tb = (b.last_reply_at || b.last_message_at || '')
+      return tb.localeCompare(ta)
+    })
+  } catch (_) {
+    /* error toast already shown by http.js */
+  } finally {
+    uploadingImage.value = false
+  }
+}
+
 async function send() {
   const text = draft.value.trim()
   if (!text || !selected.value || !sendAccountId.value) return
@@ -884,4 +982,10 @@ onBeforeUnmount(() => { stopped = true; tearDownWs() })
 .qr-list .empty { padding: 20px; color: #aaa; font-size: 12px; text-align: center; }
 .input-row { display: flex; gap: 8px; align-items: flex-end; }
 .input-row .el-textarea { flex: 1; }
+.input-actions { display: flex; flex-direction: column; gap: 6px; }
+.bubble-image {
+  display: block; max-width: 320px; max-height: 320px;
+  border-radius: 6px; cursor: zoom-in; margin-bottom: 4px;
+}
+.bubble .muted { font-size: 12px; color: #909399; padding: 4px 0; }
 </style>

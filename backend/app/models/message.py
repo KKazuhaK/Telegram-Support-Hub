@@ -39,3 +39,10 @@ class MessageRecord(Base, TimestampMixin):
     external_message_id: Mapped[str | None] = mapped_column(String(64), index=True)
     target_tg_user_id: Mapped[str | None] = mapped_column(String(64), index=True)
     entities: Mapped[list | None] = mapped_column(JSON)
+    # Outbound image attachment uploaded via the chat box. Stored on the
+    # backend filesystem under settings.session_dir / 'chat_attachments';
+    # the path is relative to that dir so a future move of the storage
+    # root only needs a config tweak. mime is what the UI uses to decide
+    # how to render the bubble (img vs generic file link, later).
+    attachment_path: Mapped[str | None] = mapped_column(String(255))
+    attachment_mime: Mapped[str | None] = mapped_column(String(120))

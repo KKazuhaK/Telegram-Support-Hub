@@ -85,6 +85,67 @@ class CustomerChatTestCase(unittest.TestCase):
             )
         return fake
 
+    def _stubbed_send_file(self, *, ok=True, error_message=None):
+        async def fake(account, target, file_path, caption=None, proxy=None):
+            # Record the file path so the test can assert it exists.
+            self._last_send_file = file_path
+            return TelegramSendResult(
+                ok=ok,
+                external_message_id="img-7" if ok else None,
+                target_tg_user_id="999" if ok else None,
+                error_code=None if ok else "rpc_error",
+                error_message=error_message,
+            )
+        return fake
+
+    def test_post_message_file_uploads_and_sends_image(self) -> None:
+        from backend.app.telegram import adapter as adapter_module
+        from pathlib import Path as _Path
+        # 1x1 transparent PNG
+        png = bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000a49444154789c6300010000000500010d0a2db40000000049454e44ae426082"
+        )
+        with patch.object(adapter_module, "get_adapter") as ga:
+            stub = type("Stub", (), {
+                "configured": True,
+                "send_file": staticmethod(self._stubbed_send_file()),
+            })()
+            ga.return_value = stub
+            r = client.post(
+                f"/api/customers/{self.customer_id}/messages/file",
+                data={"account_id": str(self.account_id), "caption": "看图"},
+                files={"file": ("a.png", png, "image/png")},
+                headers=self.auth,
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["status"], "sent")
+        self.assertEqual(body["body_snapshot"], "看图")
+        self.assertEqual(body["attachment_mime"], "image/png")
+        self.assertTrue(body["attachment_path"].startswith("chat/"))
+        # File written to upload_dir; adapter called with the on-disk path.
+        self.assertTrue(_Path(self._last_send_file).is_file())
+
+        # And the attachment-serve route returns the bytes back.
+        gr = client.get(
+            f"/api/customers/{self.customer_id}/messages/{body['id']}/attachment",
+            headers=self.auth,
+        )
+        self.assertEqual(gr.status_code, 200)
+        self.assertEqual(gr.headers["content-type"], "image/png")
+        self.assertEqual(gr.content, png)
+
+    def test_post_message_file_rejects_non_image_mime(self) -> None:
+        r = client.post(
+            f"/api/customers/{self.customer_id}/messages/file",
+            data={"account_id": str(self.account_id), "caption": ""},
+            files={"file": ("a.pdf", b"%PDF-1.4", "application/pdf")},
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertIn("图片", r.json()["detail"])
+
     def test_post_message_sends_and_persists_outbound_row(self) -> None:
         from backend.app.telegram import adapter as adapter_module
 

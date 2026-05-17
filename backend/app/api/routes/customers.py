@@ -1,7 +1,8 @@
 import asyncio
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -364,6 +365,152 @@ def send_customer_message(
             detail=f"Telegram 发送失败：{result.error_message or result.error_code}",
         )
     return to_dict(record)
+
+
+ALLOWED_ATTACHMENT_MIMES = {
+    "image/jpeg", "image/png", "image/gif", "image/webp",
+}
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024  # 10MB
+
+
+@router.post("/{customer_id}/messages/file")
+async def send_customer_file(
+    customer_id: int,
+    db: DbSession, user: CurrentUserDep,
+    account_id: int = Form(...),
+    caption: str = Form(""),
+    file: UploadFile = File(...),
+) -> dict:
+    """Send an image to a customer via the chosen TG account.
+
+    Multipart sibling of /messages (which is JSON-only). Persists the
+    file under upload_dir/chat/<msg_id>/<safe_name> and references it
+    on MessageRecord.attachment_path so the chat history can render
+    the image bubble. Caption (optional) goes into body_snapshot and
+    is sent as the Telegram caption."""
+    from pathlib import Path
+    import uuid
+
+    cust = db.get(Customer, customer_id)
+    if not cust or not can_access_row(user, db, cust):
+        raise HTTPException(status_code=404, detail="客户不存在")
+    if not can_write_tenant_data(user):
+        raise HTTPException(status_code=403, detail=permission_denied_detail("can_send_message"))
+
+    account = db.get(Account, account_id)
+    if not account or not can_access_row(user, db, account):
+        raise HTTPException(status_code=404, detail="TG 账号不存在")
+    if account.status != "active" or not account.enabled:
+        raise HTTPException(status_code=400, detail="TG 账号未启用或不在线")
+
+    mime = (file.content_type or "").lower()
+    if mime not in ALLOWED_ATTACHMENT_MIMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"暂只支持图片格式（jpg/png/gif/webp），收到 {mime or '未知'}",
+        )
+
+    blob = await file.read()
+    if len(blob) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(status_code=413, detail="图片不能超过 10MB")
+    if not blob:
+        raise HTTPException(status_code=400, detail="上传的文件为空")
+
+    from backend.app.core.config import settings as _settings
+    chat_dir = _settings.upload_dir / "chat"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    ext = {"image/jpeg": ".jpg", "image/png": ".png",
+           "image/gif": ".gif", "image/webp": ".webp"}.get(mime, ".bin")
+    fname = f"{uuid.uuid4().hex}{ext}"
+    fpath = chat_dir / fname
+    fpath.write_bytes(blob)
+
+    now_iso = datetime.now(UTC).isoformat()
+    record = MessageRecord(
+        account_id=account.id,
+        customer_id=customer_id,
+        phone=cust.phone,
+        body_snapshot=(caption or "").strip() or "[图片]",
+        direction="outbound",
+        status="sending",
+        attachment_path=f"chat/{fname}",
+        attachment_mime=mime,
+    )
+    record.created_at = datetime.now(UTC)
+    db.add(record)
+    db.flush()
+
+    send_target = cust.phone
+    if send_target and send_target.startswith("tg:"):
+        send_target = send_target[3:]
+        try:
+            send_target = int(send_target)
+        except ValueError:
+            pass
+
+    proxy = db.get(ProxyEndpoint, account.proxy_id) if account.proxy_id else None
+    adapter = adapter_module.get_adapter()
+    try:
+        # Route is `async def` (UploadFile.read() is awaitable) so we
+        # can't asyncio.run a coroutine inside the running loop — await
+        # directly.
+        result = await adapter.send_file(
+            account, send_target, str(fpath),
+            caption=(caption or None), proxy=proxy,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface to operator
+        record.status = "failed"
+        record.error_code = type(exc).__name__
+        record.error_message = str(exc)[:500]
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"Telegram 发送失败：{exc}") from exc
+
+    if result.ok:
+        record.status = "sent"
+        record.sent_at = now_iso
+        record.external_message_id = result.external_message_id
+        record.target_tg_user_id = result.target_tg_user_id
+    else:
+        record.status = "failed"
+        record.error_code = result.error_code
+        record.error_message = (result.error_message or "")[:500]
+
+    write_audit(db, actor=user, action="chat.send_file",
+                target_type="customer", target_id=customer_id,
+                detail={"account_id": account.id, "ok": result.ok,
+                        "mime": mime, "bytes": len(blob),
+                        "error_code": result.error_code})
+    db.commit()
+    db.refresh(record)
+    if not result.ok:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Telegram 发送失败：{result.error_message or result.error_code}",
+        )
+    return to_dict(record)
+
+
+@router.get("/{customer_id}/messages/{msg_id}/attachment")
+def get_message_attachment(
+    customer_id: int, msg_id: int,
+    db: DbSession, user: CurrentUserDep,
+) -> FileResponse:
+    """Serve the binary blob behind a MessageRecord's attachment_path
+    so the chat bubble can render an <img>. Same auth scope as the
+    message-list endpoint."""
+    cust = db.get(Customer, customer_id)
+    if not cust or not can_access_row(user, db, cust):
+        raise HTTPException(status_code=404, detail="客户不存在")
+    msg = db.get(MessageRecord, msg_id)
+    if not msg or msg.customer_id != customer_id or not msg.attachment_path:
+        raise HTTPException(status_code=404, detail="附件不存在")
+
+    from pathlib import Path
+    from backend.app.core.config import settings as _settings
+    fpath = _settings.upload_dir / msg.attachment_path
+    if not fpath.is_file():
+        raise HTTPException(status_code=404, detail="附件文件已丢失")
+    return FileResponse(str(fpath), media_type=msg.attachment_mime or "application/octet-stream")
 
 
 @router.post("/{customer_id}/messages/{msg_id}/translate")

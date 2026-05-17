@@ -337,6 +337,63 @@ class TelegramAdapter:
             pass
         return user
 
+    async def send_file(
+        self,
+        account: Account,
+        target: str,
+        file_path: str,
+        caption: str | None = None,
+        proxy: ProxyEndpoint | None = None,
+    ) -> TelegramSendResult:
+        """Send a single image/document file as an outbound message.
+
+        Mirrors send_message — disposable session copy, contact-import
+        fallback for phone targets, identical error envelope. Caption
+        is optional and goes under the image bubble as you'd expect."""
+        if not self.configured:
+            return TelegramSendResult(
+                ok=False,
+                error_code="telegram_not_configured",
+                error_message="Telethon not installed or TELEGRAM_API_ID/HASH not set",
+            )
+        try:
+            client, tmp_session = self._build_disposable_client(account, proxy)
+        except FileNotFoundError as exc:
+            return TelegramSendResult(ok=False, error_code="session_missing", error_message=str(exc))
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                return TelegramSendResult(
+                    ok=False, error_code="session_unauthorized", error_message="session not authorized"
+                )
+            entity = await self.resolve_target(client, target)
+            tg_user_id = str(getattr(entity, "id", "")) or None
+            sent = await client.send_file(entity, file_path, caption=caption or None)
+            return TelegramSendResult(
+                ok=True,
+                external_message_id=str(getattr(sent, "id", "")) or None,
+                target_tg_user_id=tg_user_id,
+            )
+        except Exception as exc:
+            code = type(exc).__name__
+            if telethon_errors is not None and isinstance(exc, telethon_errors.FloodWaitError):
+                return TelegramSendResult(
+                    ok=False, error_code="flood_wait",
+                    error_message=f"flood wait {getattr(exc, 'seconds', '?')}s",
+                )
+            logger.exception("send_file failed for account %s -> %s", account.id, target)
+            return TelegramSendResult(ok=False, error_code=code, error_message=str(exc))
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            try:
+                import os as _os
+                _os.unlink(tmp_session)
+            except OSError:
+                pass
+
     async def send_message(
         self,
         account: Account,
