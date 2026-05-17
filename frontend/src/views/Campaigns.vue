@@ -58,6 +58,9 @@
             :rows="4"
             placeholder="每行一条：&#10;+8613800000000,张三&#10;@alice,Alice"
           />
+          <div class="form-hint">
+            手机号可省略「+」号，但必须带国家码。例如美国号写 <code>13233930000</code>（1 + 10 位），中国号写 <code>8613800138000</code>（86 + 11 位）；只写本地号会发送失败。
+          </div>
         </el-form-item>
 
         <el-divider content-position="left">账号执行设置</el-divider>
@@ -85,6 +88,7 @@
             <li><b>好友群发</b>：对所选账号分组下已同步的 TG 好友发起。</li>
             <li><b>导入目标</b>：临时贴一批手机号或 @username，按选中分组的账号轮询发出。</li>
           </ul>
+          <p style="margin-top: 8px;">手机号可省略 <code>+</code>，但必须含国家码（美国 <code>1...</code>、中国 <code>86...</code>），否则发送会失败。</p>
         </el-card>
 
         <el-card shadow="never" class="help-card">
@@ -253,6 +257,13 @@ onMounted(load)
 .help-card p, .help-card ul { margin: 4px 0; font-size: 12px; color: #606266; line-height: 1.6; }
 .help-card ul { padding-left: 18px; }
 .help-card code {
+  background: #f0f0f0; padding: 1px 4px; border-radius: 2px;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #d56565;
+}
+.form-hint {
+  font-size: 12px; color: #909399; line-height: 1.5; margin-top: 4px;
+}
+.form-hint code {
   background: #f0f0f0; padding: 1px 4px; border-radius: 2px;
   font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #d56565;
 }
