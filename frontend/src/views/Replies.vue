@@ -1,6 +1,8 @@
 <template>
   <div class="chat-shell">
-    <!-- Left: customer list, ranked by most recent activity. -->
+    <!-- Left: sidebar with two tabs — known customers and orphan
+         inbound (sender not yet a Customer). The latter surfaces test
+         replies + any random TG user who DM'd one of our accounts. -->
     <aside class="chat-sidebar">
       <div class="sidebar-head">
         <el-input
@@ -11,31 +13,65 @@
         >
           <template #prefix><el-icon><Search /></el-icon></template>
         </el-input>
-        <el-button size="small" :icon="Refresh" link @click="loadCustomers">
+        <el-button size="small" :icon="Refresh" link @click="reloadActive">
           刷新
         </el-button>
       </div>
+      <el-radio-group v-model="sidebarTab" size="small" class="sidebar-tabs" @change="onSidebarTabChange">
+        <el-radio-button value="customer">客户</el-radio-button>
+        <el-radio-button value="orphan">
+          未匹配
+          <el-badge v-if="orphans.length" :value="orphans.length" :max="99" />
+        </el-radio-button>
+      </el-radio-group>
       <el-scrollbar class="sidebar-list">
-        <div
-          v-for="c in filteredCustomers"
-          :key="c.id"
-          class="customer-row"
-          :class="{ active: selected?.id === c.id, unread: !!c._unread }"
-          @click="selectCustomer(c)"
-        >
-          <el-avatar :size="40">{{ initial(c) }}</el-avatar>
-          <div class="meta">
-            <div class="row1">
-              <span class="name">{{ c.name || c.phone }}</span>
-              <span class="ts">{{ shortTs(c.last_reply_at || c.last_message_at) }}</span>
+        <template v-if="sidebarTab === 'customer'">
+          <div
+            v-for="c in filteredCustomers"
+            :key="c.id"
+            class="customer-row"
+            :class="{ active: selected?.kind === 'customer' && selected.id === c.id, unread: !!c._unread }"
+            @click="selectCustomer(c)"
+          >
+            <el-avatar :size="40">{{ initial(c) }}</el-avatar>
+            <div class="meta">
+              <div class="row1">
+                <span class="name">{{ c.name || c.phone }}</span>
+                <span class="ts">{{ shortTs(c.last_reply_at || c.last_message_at) }}</span>
+              </div>
+              <div class="preview">{{ c.last_reply_text || c.phone }}</div>
             </div>
-            <div class="preview">{{ c.last_reply_text || c.phone }}</div>
+            <el-badge v-if="c._unread" is-dot class="dot" />
           </div>
-          <el-badge v-if="c._unread" is-dot class="dot" />
-        </div>
-        <div v-if="!filteredCustomers.length" class="empty">
-          暂无客户。新客户回复或群发后会出现在这里。
-        </div>
+          <div v-if="!filteredCustomers.length" class="empty">
+            暂无客户。新客户回复或群发后会出现在这里。
+          </div>
+        </template>
+        <template v-else>
+          <div
+            v-for="t in orphans"
+            :key="`${t.account_id}-${t.target_tg_user_id || t.phone}`"
+            class="customer-row"
+            :class="{ active: selected?.kind === 'orphan'
+              && selected.account_id === t.account_id
+              && selected.target_tg_user_id === t.target_tg_user_id
+              && selected.phone === t.phone }"
+            @click="selectOrphan(t)"
+          >
+            <el-avatar :size="40">?</el-avatar>
+            <div class="meta">
+              <div class="row1">
+                <span class="name">{{ t.phone || ('TG:' + t.target_tg_user_id) }}</span>
+                <span class="ts">{{ shortTs(t.last_at) }}</span>
+              </div>
+              <div class="preview">{{ t.last_snippet }}</div>
+            </div>
+            <el-tag size="small" type="warning">{{ t.msg_count }}</el-tag>
+          </div>
+          <div v-if="!orphans.length" class="empty">
+            没有未匹配的回复。
+          </div>
+        </template>
       </el-scrollbar>
       <div class="sidebar-foot">
         <el-tag :type="wsStatus === 'open' ? 'success' : 'info'" size="small">
@@ -47,8 +83,16 @@
     <!-- Right: chat pane. -->
     <section class="chat-main" v-if="selected">
       <header class="chat-head">
-        <div class="title">{{ selected.name || selected.phone }}</div>
-        <div class="sub">{{ selected.phone }}</div>
+        <div>
+          <div class="title">{{ headerTitle }}</div>
+          <div class="sub">{{ headerSub }}</div>
+        </div>
+        <el-button
+          v-if="selected.kind === 'orphan'"
+          type="primary"
+          size="small"
+          @click="promoteOrphan(selected)"
+        >转为客户</el-button>
       </header>
 
       <el-scrollbar ref="historyScroll" class="chat-history">
@@ -221,6 +265,10 @@ const auth = useAuthStore()
 
 const customers = ref([])
 const accounts = ref([])
+const orphans = ref([])
+const sidebarTab = ref('customer')
+// selected = { kind: 'customer', id, ...customer fields }
+//          | { kind: 'orphan', account_id, target_tg_user_id, phone, ... }
 const selected = ref(null)
 const history = ref([])
 const historyLoading = ref(false)
@@ -280,6 +328,21 @@ const scopedQuickReplies = computed(() => {
 
 const customerLang = computed(() => selected.value?.last_source_lang || '')
 
+const headerTitle = computed(() => {
+  if (!selected.value) return ''
+  if (selected.value.kind === 'orphan') {
+    return selected.value.phone || `TG:${selected.value.target_tg_user_id}`
+  }
+  return selected.value.name || selected.value.phone
+})
+const headerSub = computed(() => {
+  if (!selected.value) return ''
+  if (selected.value.kind === 'orphan') {
+    return `未匹配客户（账号 #${selected.value.account_id}）— 点「转为客户」纳入正式对话`
+  }
+  return selected.value.phone
+})
+
 function initial(c) {
   return (c.name || c.phone || '?').slice(0, 1).toUpperCase()
 }
@@ -328,34 +391,92 @@ async function loadAccounts() {
 }
 
 async function selectCustomer(c) {
-  selected.value = c
+  selected.value = { ...c, kind: 'customer' }
   c._unread = false
-  await loadHistory(c.id)
-  // Prefer the account that was last used in this conversation.
+  await loadHistoryForCurrent()
   const lastOut = [...history.value].reverse().find((m) => m.direction === 'outbound' && m.account_id)
   if (lastOut) sendAccountId.value = lastOut.account_id
   else if (c.assigned_account_id) sendAccountId.value = c.assigned_account_id
 }
 
-async function loadHistory(customerId) {
+async function selectOrphan(t) {
+  selected.value = { ...t, kind: 'orphan' }
+  await loadHistoryForCurrent()
+  // Pre-pick the account that received this orphan thread so reply
+  // (after promote) flows from the right number.
+  if (t.account_id) sendAccountId.value = t.account_id
+}
+
+async function loadHistoryForCurrent() {
+  if (!selected.value) return
   historyLoading.value = true
   try {
-    const { data } = await http.get(`/customers/${customerId}/messages`)
-    // Pre-init UI-only fields so Vue's Proxy tracks them once we set
-    // them later (_translating, _collapsed). translation comes from the
-    // server (cached or null).
+    let data
+    if (selected.value.kind === 'customer') {
+      const r = await http.get(`/customers/${selected.value.id}/messages`)
+      data = r.data
+    } else {
+      const params = { account_id: selected.value.account_id }
+      if (selected.value.target_tg_user_id) params.target_tg_user_id = selected.value.target_tg_user_id
+      if (selected.value.phone) params.phone = selected.value.phone
+      const r = await http.get('/orphan-threads/messages', { params })
+      data = r.data
+    }
     history.value = (data || []).map((m) => ({
       ...m, _translating: false, _collapsed: false,
     }))
     await nextTick()
     scrollToBottom()
-    // Fire off lazy auto-translate for any inbound row that hasn't
-    // been cached yet. Sequential by design — don't hammer the
-    // provider with a long history opening.
     autoTranslatePendingInbound()
   } finally {
     historyLoading.value = false
   }
+}
+
+// Back-compat shim — other callers (websocket handler) reference loadHistory(id).
+async function loadHistory(customerId) {
+  selected.value = { kind: 'customer', id: customerId }
+  await loadHistoryForCurrent()
+}
+
+async function loadOrphans() {
+  try {
+    const { data } = await http.get('/orphan-threads')
+    orphans.value = data || []
+  } catch (_) {}
+}
+
+function onSidebarTabChange() {
+  if (sidebarTab.value === 'orphan') loadOrphans()
+  else loadCustomers()
+}
+
+function reloadActive() {
+  if (sidebarTab.value === 'orphan') loadOrphans()
+  else loadCustomers()
+}
+
+async function promoteOrphan(t) {
+  try {
+    await ElMessageBox.confirm(
+      `把 ${t.phone || 'TG:' + t.target_tg_user_id} 加入客户列表？所有历史消息会自动归入新客户。`,
+      '转为客户',
+    )
+  } catch (_) { return }
+  try {
+    const { data } = await http.post('/orphan-threads/promote', {
+      account_id: t.account_id,
+      phone: t.phone || null,
+      target_tg_user_id: t.target_tg_user_id || null,
+    })
+    ElMessage.success(`已转为客户（id=${data.customer.id}），重新归入 ${data.messages_retagged} 条消息`)
+    // Switch to customer tab and select the new customer.
+    await loadCustomers()
+    await loadOrphans()
+    sidebarTab.value = 'customer'
+    const newCust = customers.value.find((c) => c.id === data.customer.id)
+    if (newCust) selectCustomer(newCust)
+  } catch (_) {}
 }
 
 function scrollToBottom() {
@@ -464,6 +585,10 @@ async function autoTranslatePendingInbound() {
 async function send() {
   const text = draft.value.trim()
   if (!text || !selected.value || !sendAccountId.value) return
+  if (selected.value.kind === 'orphan') {
+    ElMessage.warning('对方还不是客户，请先点「转为客户」再回复。')
+    return
+  }
   sending.value = true
   try {
     // Server handles translation when auto_translate=true: it sends the
@@ -522,21 +647,32 @@ function connect() {
 function handleIncoming(payload) {
   // Match the affected customer by phone; bump it to the top + mark unread.
   const phone = payload.phone
-  if (!phone) return
-  const c = customers.value.find((c) => c.phone === phone)
+  const c = phone ? customers.value.find((c) => c.phone === phone) : null
   if (c) {
     c.last_reply_at = payload.received_at || new Date().toISOString()
     c.last_reply_text = payload.text
-    if (selected.value?.id !== c.id) c._unread = true
+    if (!(selected.value?.kind === 'customer' && selected.value.id === c.id)) {
+      c._unread = true
+    }
     customers.value = customers.value.slice().sort((a, b) => {
       const ta = (a.last_reply_at || a.last_message_at || '')
       const tb = (b.last_reply_at || b.last_message_at || '')
       return tb.localeCompare(ta)
     })
-  }
-  // If the user is currently looking at this conversation, refresh history.
-  if (selected.value && (selected.value.phone === phone)) {
-    loadHistory(selected.value.id)
+    if (selected.value?.kind === 'customer' && selected.value.phone === phone) {
+      loadHistoryForCurrent()
+    }
+  } else {
+    // Sender not (yet) a customer — refresh orphan list so the new
+    // thread (or new message on an existing orphan) shows up.
+    loadOrphans()
+    if (
+      selected.value?.kind === 'orphan'
+      && (selected.value.phone === phone
+          || selected.value.target_tg_user_id === payload.tg_user_id)
+    ) {
+      loadHistoryForCurrent()
+    }
   }
 }
 
@@ -559,6 +695,7 @@ watch(() => auth.token, (newToken, oldToken) => {
 
 onMounted(() => {
   loadCustomers()
+  loadOrphans()
   loadAccounts()
   connect()
 })
@@ -588,6 +725,12 @@ onBeforeUnmount(() => { stopped = true; tearDownWs() })
   border-bottom: 1px solid var(--tg-border, #e5e6eb);
   align-items: center;
 }
+.sidebar-tabs {
+  display: flex;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--tg-border, #e5e6eb);
+}
+.sidebar-tabs :deep(.el-radio-button__inner) { padding: 4px 12px; }
 .sidebar-list { flex: 1; }
 .customer-row {
   display: flex;
@@ -625,6 +768,10 @@ onBeforeUnmount(() => { stopped = true; tearDownWs() })
   padding: 12px 16px;
   border-bottom: 1px solid var(--tg-border, #e5e6eb);
   background: var(--tg-surface, #fff);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
 }
 .chat-head .title { font-size: 16px; font-weight: 600; }
 .chat-head .sub { font-size: 12px; color: #888; }

@@ -18,6 +18,7 @@ from backend.app.api.routes import (
     phones_items,
     proxies,
     proxy_groups,
+    orphan_threads,
     quick_replies,
     stats,
     system_settings,
@@ -48,5 +49,6 @@ api_router.include_router(business_agents.router, prefix="/business-agents", tag
 api_router.include_router(merchants.router, prefix="/merchants", tags=["merchants"])
 api_router.include_router(translate.router, prefix="/translate", tags=["translate"])
 api_router.include_router(quick_replies.router, prefix="/quick-replies", tags=["quick-replies"])
+api_router.include_router(orphan_threads.router, prefix="/orphan-threads", tags=["orphan-threads"])
 api_router.include_router(system_settings.router, prefix="/system", tags=["system"])
 api_router.include_router(ws.router, prefix="/ws", tags=["ws"])
