@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api.router import api_router
+from backend.app.api.routes import ws as ws_routes
 from backend.app.core.config import settings
 from backend.app.core.database import create_db_and_tables
 
@@ -32,6 +33,11 @@ def create_app() -> FastAPI:
         return {"status": "ok", "app": settings.app_name, "env": settings.app_env}
 
     app.include_router(api_router, prefix="/api")
+    # WebSocket also mounted at /ws/* directly (matches the frontend's
+    # `ws://host/ws/replies?token=...` URL and nginx's `/ws/` proxy
+    # block). Without this it sits at /api/ws/replies and the frontend's
+    # short URL 404s into a 403 WS upgrade rejection.
+    app.include_router(ws_routes.router, prefix="/ws")
     return app
 
 
