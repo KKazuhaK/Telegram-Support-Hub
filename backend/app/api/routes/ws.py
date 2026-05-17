@@ -97,7 +97,16 @@ async def replies_stream(ws: WebSocket, token: str = "") -> None:
 
     try:
         while True:
-            message = pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            # redis-py pubsub.get_message is SYNC; calling it directly
+            # inside an async handler blocks the asyncio event loop for
+            # up to `timeout` seconds per iteration, starving every
+            # concurrent HTTP request (user saw infinite spinners on
+            # every page while one WS was open). Offload to a thread.
+            message = await asyncio.to_thread(
+                pubsub.get_message,
+                ignore_subscribe_messages=True,
+                timeout=1.0,
+            )
             if message is None:
                 # heartbeat: gives a chance to detect client disconnect
                 try:
