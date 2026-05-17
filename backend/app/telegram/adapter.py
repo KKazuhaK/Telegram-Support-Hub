@@ -301,6 +301,12 @@ class TelegramAdapter:
         target-side issue, not an account problem."""
         if not target:
             return await client.get_entity(target)
+        # Numeric TG user_id (int): get_entity resolves it directly — no
+        # phone-vs-username heuristics apply. Promoted-from-orphan
+        # customers come in as int because customers.py strips the
+        # 'tg:' prefix and coerces.
+        if isinstance(target, int):
+            return await client.get_entity(target)
         digits_only = target.lstrip("+").isdigit()
         if not digits_only:
             return await client.get_entity(target)
