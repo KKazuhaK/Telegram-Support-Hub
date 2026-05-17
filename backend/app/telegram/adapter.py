@@ -195,19 +195,49 @@ class TelegramAdapter:
     def build_proxy_config(self, proxy: ProxyEndpoint | None) -> tuple | None:
         return _proxy_to_telethon(proxy)
 
-    def _build_client(self, account: Account, proxy: ProxyEndpoint | None) -> Any:
-        session_path = _strip_session_suffix(account.session_path)
-        if not Path(account.session_path).exists():
-            raise FileNotFoundError(account.session_path)
+    def _build_client(self, account: Account, proxy: ProxyEndpoint | None,
+                      session_path: str | None = None) -> Any:
+        """Build a TelegramClient. `session_path` overrides the account
+        path — used by `_build_disposable_client` to point at a copy so
+        the long-lived listen_worker doesn't share a SQLite file lock
+        with one-shot send / op clients."""
+        path = session_path or account.session_path
+        if not Path(path).exists():
+            raise FileNotFoundError(path)
         proxy_cfg = _proxy_to_telethon(proxy)
         return TelegramClient(
-            session_path,
+            _strip_session_suffix(path),
             int(self.api_id),
             self.api_hash,
             proxy=proxy_cfg,
             connection_retries=2,
             timeout=self.connect_timeout,
         )
+
+    def _build_disposable_client(self, account: Account,
+                                 proxy: ProxyEndpoint | None) -> tuple[Any, str]:
+        """Copy the account's session file to a unique temp path and
+        return (client, temp_path). Caller is responsible for unlinking
+        the temp_path after disconnect.
+
+        Why: the persistent listen_worker keeps the original session
+        file SQLite-locked (or holds open file handles); a one-shot
+        send/validate client opening the same file racing with it hits
+        'database is locked'. Working on a copy avoids the lock without
+        coordinating between containers.
+        """
+        import shutil
+        import tempfile
+        if not Path(account.session_path).exists():
+            raise FileNotFoundError(account.session_path)
+        # NamedTemporaryFile gives us a unique path; delete=False because
+        # Telethon opens it itself and we unlink in the caller's finally.
+        fd = tempfile.NamedTemporaryFile(suffix=".session", delete=False,
+                                         prefix=f"send-{account.id}-")
+        fd.close()
+        shutil.copyfile(account.session_path, fd.name)
+        client = self._build_client(account, proxy, session_path=fd.name)
+        return client, fd.name
 
     async def validate_session(
         self, account: Account, proxy: ProxyEndpoint | None = None
@@ -221,7 +251,7 @@ class TelegramAdapter:
             )
 
         try:
-            client = self._build_client(account, proxy)
+            client, tmp_session = self._build_disposable_client(account, proxy)
         except FileNotFoundError as exc:
             return TelegramValidateResult(ok=False, error_code="session_missing", error_message=str(exc))
 
@@ -251,6 +281,11 @@ class TelegramAdapter:
                 await client.disconnect()
             except Exception:
                 pass
+            try:
+                import os as _os
+                _os.unlink(tmp_session)
+            except OSError:
+                pass
 
     async def resolve_target(self, client: Any, target: str) -> Any:
         """Resolve a phone or @username to a Telegram entity."""
@@ -271,8 +306,11 @@ class TelegramAdapter:
                 error_message="Telethon not installed or TELEGRAM_API_ID/HASH not set",
             )
 
+        # Send via a disposable session copy so listen_worker's
+        # long-lived hold on the original SQLite file doesn't trigger
+        # 'database is locked'.
         try:
-            client = self._build_client(account, proxy)
+            client, tmp_session = self._build_disposable_client(account, proxy)
         except FileNotFoundError as exc:
             return TelegramSendResult(ok=False, error_code="session_missing", error_message=str(exc))
 
@@ -310,6 +348,11 @@ class TelegramAdapter:
                 await client.disconnect()
             except Exception:
                 pass
+            try:
+                import os as _os
+                _os.unlink(tmp_session)
+            except OSError:
+                pass
 
     async def run_operation(
         self,
@@ -338,7 +381,7 @@ class TelegramAdapter:
                 error_message="Telethon not installed or TELEGRAM_API_ID/HASH not set",
             )
         try:
-            client = self._build_client(account, proxy)
+            client, tmp_session = self._build_disposable_client(account, proxy)
         except FileNotFoundError as exc:
             return OperationResult(ok=False, error_code="session_missing", error_message=str(exc))
 
@@ -360,6 +403,11 @@ class TelegramAdapter:
             except Exception:
                 # Cleanup-only path; intentionally swallowed so the caller
                 # still sees the original error_code, not a disconnect issue.
+                pass
+            try:
+                import os as _os
+                _os.unlink(tmp_session)
+            except OSError:
                 pass
 
     async def _dispatch_operation(self, client: Any, operation: str, params: dict) -> OperationResult:
