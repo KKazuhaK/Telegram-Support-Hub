@@ -17,8 +17,9 @@
       <el-table-column prop="sent_count" label="已发" width="80" />
       <el-table-column prop="reply_count" label="回复" width="80" />
       <el-table-column prop="failed_count" label="失败" width="80" />
-      <el-table-column label="操作" width="280">
+      <el-table-column label="操作" width="340">
         <template #default="{ row }">
+          <el-button size="small" link @click="openRunsDialog(row)">详情</el-button>
           <el-button size="small" link @click="action(row, 'start')">启动</el-button>
           <el-button size="small" link @click="action(row, 'pause')">暂停</el-button>
           <el-button size="small" link @click="action(row, 'resume')">继续</el-button>
@@ -28,6 +29,45 @@
       </el-table-column>
     </el-table>
   </el-card>
+
+  <el-dialog v-model="runsDialog"
+             :title="runsTarget ? `任务 #${runsTarget.id} · ${runsTarget.name || runsTarget.target_type} · 发送明细` : '发送明细'"
+             width="920px" top="6vh">
+    <div v-if="runsTarget" class="runs-summary">
+      <el-tag type="info">目标 {{ runsTarget.target_count ?? '—' }}</el-tag>
+      <el-tag type="success">已发 {{ runsTarget.sent_count ?? 0 }}</el-tag>
+      <el-tag>已读 {{ runsTarget.read_count ?? 0 }}</el-tag>
+      <el-tag type="warning">回复 {{ runsTarget.reply_count ?? 0 }}</el-tag>
+      <el-tag type="danger">失败 {{ runsTarget.failed_count ?? 0 }}</el-tag>
+      <el-tag>状态 {{ runsTarget.status }}</el-tag>
+    </div>
+    <el-table :data="runs" v-loading="runsLoading" size="small" border stripe height="500"
+              empty-text="还没有发送记录。任务可能尚未启动，或目标列表为空。">
+      <el-table-column label="目标" min-width="200">
+        <template #default="{ row }">
+          <div>{{ row.phone || row.target_tg_user_id || '—' }}</div>
+          <div v-if="row.target_tg_user_id && row.phone" class="muted">tg:{{ row.target_tg_user_id }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="发送号" width="160">
+        <template #default="{ row }">{{ row.account_id ? `#${row.account_id}` : '—' }}</template>
+      </el-table-column>
+      <el-table-column label="结果" width="100">
+        <template #default="{ row }">
+          <el-tag :type="STATUS_TYPE[row.status] || 'info'" size="small">
+            {{ STATUS_LABEL[row.status] || row.status }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="error_code" label="错误码" width="160" />
+      <el-table-column prop="error_message" label="错误信息" min-width="240" show-overflow-tooltip />
+      <el-table-column prop="sent_at" label="时间" width="160" />
+    </el-table>
+    <template #footer>
+      <el-button @click="loadRuns" :loading="runsLoading">刷新</el-button>
+      <el-button @click="runsDialog = false">关闭</el-button>
+    </template>
+  </el-dialog>
 
   <el-dialog v-model="dialogVisible" title="新建群发任务" width="900px" top="6vh">
     <div class="dialog-grid">
@@ -214,6 +254,40 @@ async function create() {
   } finally { creating.value = false }
 }
 
+const STATUS_LABEL = {
+  pending: '待发', queued: '排队', sent: '已发', read: '已读',
+  replied: '已回复', failed: '失败', failed_permanent: '失败(终)',
+  cancelled: '已取消',
+}
+const STATUS_TYPE = {
+  sent: 'success', read: 'success', replied: 'warning',
+  failed: 'danger', failed_permanent: 'danger',
+  cancelled: 'info', pending: 'info', queued: 'info',
+}
+
+const runsDialog = ref(false)
+const runsTarget = ref(null)
+const runs = ref([])
+const runsLoading = ref(false)
+
+async function openRunsDialog(row) {
+  runsTarget.value = row
+  runs.value = []
+  runsDialog.value = true
+  await loadRuns()
+}
+
+async function loadRuns() {
+  if (!runsTarget.value) return
+  runsLoading.value = true
+  try {
+    const { data } = await http.get(`/campaigns/${runsTarget.value.id}/messages`, {
+      params: { limit: 500 },
+    })
+    runs.value = data || []
+  } finally { runsLoading.value = false }
+}
+
 async function action(row, name) {
   await http.post(`/campaigns/${row.id}/${name}`)
   ElMessage.success(`已${({ start: '启动', pause: '暂停', resume: '继续', cancel: '取消' })[name]}`)
@@ -267,4 +341,6 @@ onMounted(load)
   background: #f0f0f0; padding: 1px 4px; border-radius: 2px;
   font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #d56565;
 }
+.runs-summary { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.muted { color: #909399; font-size: 12px; }
 </style>
