@@ -178,6 +178,32 @@ class CustomerEditApiTestCase(unittest.TestCase):
         resp = self.client.delete("/api/customers/99999", headers=self.auth)
         self.assertEqual(resp.status_code, 404)
 
+    def test_delete_detaches_messages_instead_of_500(self) -> None:
+        # MessageRecord.customer_id is a FK with no cascade; deleting a
+        # customer that still has linked messages must null those rows
+        # rather than 500 on a constraint violation.
+        from backend.app.models.message import MessageRecord
+        with SessionLocal() as db:
+            db.add(MessageRecord(
+                account_id=None, customer_id=self.customer_id,
+                phone="+8613800000000", body_snapshot="hi",
+                direction="inbound", status="received",
+                sent_at="2026-05-16T01:00:00",
+            ))
+            db.commit()
+
+        resp = self.client.delete(
+            f"/api/customers/{self.customer_id}", headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json().get("messages_detached"), 1)
+        with SessionLocal() as db:
+            self.assertIsNone(db.get(Customer, self.customer_id))
+            leftover = db.query(MessageRecord).filter_by(
+                phone="+8613800000000"
+            ).one()
+            self.assertIsNone(leftover.customer_id)
+
 
 class CustomerAssignApiTestCase(unittest.TestCase):
     def setUp(self) -> None:

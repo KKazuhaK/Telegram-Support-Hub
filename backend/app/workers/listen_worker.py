@@ -42,10 +42,19 @@ async def _persist_reply(payload: dict) -> None:
                 friend.last_reply_at = received_at
                 friend.status = "replied"
 
-        # 2. Customer match (by phone)
+        # 2. Customer match: first by real phone, then by the placeholder
+        # phone `tg:<sender_tg_user_id>` that the 'promote orphan thread'
+        # flow assigns when the sender has no phone visible. Without the
+        # second lookup every new inbound from the same orphan-promoted
+        # contact lands back in the orphan bucket instead of the
+        # promoted customer's conversation.
         customer = None
         if phone:
             customer = db.scalar(select(Customer).where(Customer.phone == phone))
+        if customer is None and tg_user_id:
+            customer = db.scalar(
+                select(Customer).where(Customer.phone == f"tg:{tg_user_id}")
+            )
         if customer:
             customer.last_reply_at = received_at
             customer.last_reply_text = text

@@ -30,13 +30,53 @@ from backend.app.services.serializers import list_dict, to_dict
 router = APIRouter()
 
 
+def _rescan_and_retag_promoted(db) -> int:
+    """Catch-up scan: any orphan message whose target_tg_user_id matches
+    an existing Customer whose phone is the `tg:<id>` placeholder gets
+    retagged to that customer. Closes the window where the listen_worker
+    matched only by real phone and dropped messages from a
+    promoted-from-orphan sender back into the orphan bucket. Returns
+    the number of rows retagged."""
+    # Find orphan inbound rows that have a numeric target_tg_user_id and
+    # whose `tg:<id>` placeholder matches a real customer row.
+    orphans = list(db.scalars(
+        select(MessageRecord)
+        .where(MessageRecord.customer_id.is_(None))
+        .where(MessageRecord.direction == "inbound")
+        .where(MessageRecord.target_tg_user_id.isnot(None))
+    ))
+    if not orphans:
+        return 0
+    # Build a (placeholder_phone -> customer_id) lookup in one query.
+    placeholders = {f"tg:{m.target_tg_user_id}" for m in orphans}
+    matched = {
+        c.phone: c.id for c in db.scalars(
+            select(Customer).where(Customer.phone.in_(placeholders))
+        )
+    }
+    retagged = 0
+    for m in orphans:
+        cid = matched.get(f"tg:{m.target_tg_user_id}")
+        if cid:
+            m.customer_id = cid
+            retagged += 1
+    if retagged:
+        db.commit()
+    return retagged
+
+
 @router.get("")
 def list_orphan_threads(db: DbSession, _: AdminDep, limit: int = 200) -> list[dict]:
     """One row per distinct (account_id, sender) thread, latest first.
     Sender identity = COALESCE(target_tg_user_id, phone). The UI uses
     these as the left-sidebar entries when the operator switches to
     the 未匹配 tab.
+
+    Side-effect: opportunistic rescan that retags any orphan whose
+    sender tg_user_id matches an existing promoted-from-orphan
+    customer. Cheap and self-healing.
     """
+    _rescan_and_retag_promoted(db)
     # Build sub-aggregation: per (account_id, target_tg_user_id, phone),
     # max sent_at + count + last message text.
     aggregated = (

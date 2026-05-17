@@ -160,12 +160,19 @@ def delete_customer(customer_id: int, db: DbSession, user: CurrentUserDep) -> di
     row = db.get(Customer, customer_id)
     if not row or not can_access_row(user, db, row):
         raise HTTPException(status_code=404, detail="客户不存在")
+    # MessageRecord.customer_id FKs here with no cascade; null it out so
+    # the delete doesn't violate the FK. The messages become orphans
+    # again (admin can re-promote, or hard-delete from the orphan view).
+    from backend.app.models.message import MessageRecord
+    detached = db.query(MessageRecord).filter(
+        MessageRecord.customer_id == customer_id
+    ).update({MessageRecord.customer_id: None}, synchronize_session=False)
     db.delete(row)
     write_audit(db, actor=user, action="customer.delete",
                 target_type="customer", target_id=customer_id,
-                detail={"phone": row.phone})
+                detail={"phone": row.phone, "messages_detached": int(detached or 0)})
     db.commit()
-    return {"deleted": True}
+    return {"deleted": True, "messages_detached": int(detached or 0)}
 
 
 @router.post("/assign")

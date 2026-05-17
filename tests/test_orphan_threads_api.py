@@ -129,6 +129,33 @@ class OrphanThreadsTestCase(unittest.TestCase):
         rows = r.json()
         self.assertEqual({r["phone"] for r in rows}, {"+9990000000"})
 
+    def test_list_retags_orphans_matching_tg_placeholder_customer(self) -> None:
+        # Simulate the bug window: an inbound row from a sender whose
+        # tg_user_id matches a `tg:<id>` promoted customer is still
+        # sitting in the orphan bucket (because listen_worker matched
+        # only by real phone before the fix). The list endpoint runs an
+        # opportunistic rescan and should retag it on read.
+        promoted = Customer(phone="tg:234001", name="prev-promoted",
+                            consent=True, status="assigned",
+                            assigned_account_id=self.account_id)
+        self.db.add(promoted)
+        self.db.commit()
+
+        r = client.get("/api/orphan-threads", headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        rows = r.json()
+        # The +234 thread (target_tg_user_id=234001) must disappear from
+        # the orphan list because it was retagged to the promoted customer.
+        self.assertEqual({row["phone"] for row in rows}, {"+9990000000"})
+
+        with SessionLocal() as db:
+            retagged = db.query(MessageRecord).filter_by(
+                target_tg_user_id="234001"
+            ).all()
+            self.assertTrue(retagged)
+            for m in retagged:
+                self.assertEqual(m.customer_id, promoted.id)
+
     def test_promote_rejects_duplicate_phone(self) -> None:
         client.post(
             "/api/orphan-threads/promote",

@@ -98,6 +98,34 @@ class ListenWorkerTestCase(unittest.TestCase):
         self.assertEqual(published["account_id"], account.id)
         self.assertEqual(published["text"], "ping")
 
+    def test_reply_matches_customer_by_tg_placeholder_phone(self) -> None:
+        # Promoted-from-orphan customers carry a placeholder phone like
+        # `tg:<sender_id>`. listen_worker must fall back to this when the
+        # inbound payload's `phone` doesn't directly match.
+        account, *_ = _seed_full(self.db)
+        promoted = Customer(phone="tg:7332000121", name="Loan tester",
+                            consent=True, status="assigned")
+        self.db.add(promoted)
+        self.db.commit()
+
+        payload = {
+            "account_id": account.id,
+            "tg_user_id": "7332000121",
+            "phone": None,
+            "text": "你好",
+            "date": "2026-05-16T01:00:00+00:00",
+        }
+        asyncio.run(_persist_reply(payload))
+
+        with SessionLocal() as db:
+            cust = db.get(Customer, promoted.id)
+            self.assertEqual(cust.status, "replied")
+            self.assertEqual(cust.last_reply_text, "你好")
+            inbound = db.query(MessageRecord).filter_by(
+                direction="inbound", target_tg_user_id="7332000121"
+            ).one()
+            self.assertEqual(inbound.customer_id, promoted.id)
+
     def test_reply_without_match_is_silent(self) -> None:
         # no seed
         payload = {
