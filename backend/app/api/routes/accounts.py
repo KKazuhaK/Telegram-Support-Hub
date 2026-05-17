@@ -296,24 +296,29 @@ async def import_zip(db: DbSession, admin: AdminDep, sessions: UploadFile = File
 
     # ---- 1) Telegram Desktop tdata layout ----
     # Each <phone>/tdata/* folder is converted to a single .session file
-    # via opentele, then handled like the flat layout below.
-    # convert_tdata_zip_entry internally calls asyncio.run() to drive
-    # opentele's async API. Since this route handler is itself async
-    # (running on FastAPI's event loop), asyncio.run from within would
-    # raise "cannot be called from a running event loop". Offload to the
-    # default threadpool — a fresh thread has no running loop so
-    # asyncio.run is legal there, and the request loop stays free.
+    # via opentele. Offload to the default threadpool because
+    # convert_tdata_zip_entry calls asyncio.run() internally, which
+    # can't nest in this request's already-running event loop.
     import asyncio as _asyncio
+    import logging as _logging
+    import traceback as _traceback
+    _log = _logging.getLogger(__name__)
     tdata_stems = is_tdata_layout(zf)
     for stem in tdata_stems:
         try:
             session_bytes = await _asyncio.to_thread(
                 convert_tdata_zip_entry, zf, stem,
             )
-        except Exception as exc:  # noqa: BLE001 — surface to operator
+        except BaseException as exc:  # noqa: BLE001 — catch broader than Exception
+            # Log full traceback in the container so operators can dig
+            # past the surfaced one-line reason. Catch BaseException so
+            # weird stuff (e.g. opentele asserting, Qt SystemExit) also
+            # falls through to skipped rather than 500-ing the request.
+            tb = _traceback.format_exc()
+            _log.error("tdata convert failed for %s:\n%s", stem, tb)
             skipped.append({
                 "file": f"{stem}/tdata",
-                "reason": f"tdata 转换失败：{exc}",
+                "reason": f"tdata 转换失败 ({type(exc).__name__}): {exc}",
             })
             continue
         _persist_session(
