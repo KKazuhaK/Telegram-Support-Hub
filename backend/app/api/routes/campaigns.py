@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.app.api.deps import CurrentUserDep, DbSession
 from backend.app.models.account import AccountGroupMember

@@ -125,6 +125,30 @@ class BatchOperationCampaignTestCase(unittest.TestCase):
         r = self.client.get("/api/campaigns/99999/operation-runs", headers=self.auth)
         self.assertEqual(r.status_code, 404)
 
+    def test_preflight_returns_severity_and_counts(self) -> None:
+        # Regression for a NameError: preflight uses func.count() but the
+        # `func` import was missing → endpoint 500'd on every form change.
+        with SessionLocal() as db:
+            group, _ = _seed_group_and_template(db)
+            group_id = group.id
+        r = self.client.post(
+            "/api/campaigns/preflight",
+            json={
+                "task_kind": "broadcast",
+                "target_type": "imported_target_broadcast",
+                "account_group_ids": [group_id],
+                "imported_targets_count": 50,
+            },
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["target_count"], 50)
+        self.assertEqual(body["eligible_accounts"], 1)
+        self.assertEqual(body["per_account_avg"], 50.0)
+        # 50 / 1 = 50 per-account avg → red zone (≥25).
+        self.assertEqual(body["severity"], "danger")
+
     def test_modify_info_requires_extra_params(self) -> None:
         with SessionLocal() as db:
             group, _ = _seed_group_and_template(db)
