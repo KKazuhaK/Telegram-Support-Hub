@@ -208,6 +208,57 @@ class ProxyGroupsApiTestCase(unittest.TestCase):
             self.assertIsNone(rows["10.0.0.1"].username)
             self.assertEqual(rows["207.228.46.141"].username, "user1")
 
+    def test_batch_update_status_and_group(self) -> None:
+        g = self.client.post("/api/proxy-groups",
+                             json={"name": "g1", "remark": ""},
+                             headers=self.auth).json()
+        ids = []
+        for i in range(3):
+            r = self.client.post("/api/proxies", json={
+                "name": f"p{i}", "protocol": "socks5",
+                "host": "9.9.9.9", "port": 1100 + i,
+            }, headers=self.auth)
+            ids.append(r.json()["id"])
+
+        # Move them all into g1 + set status=disabled in one shot.
+        r = self.client.post("/api/proxies/batch", json={
+            "ids": ids, "status": "disabled", "group_id": g["id"],
+        }, headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["updated"], 3)
+
+        listing = self.client.get(f"/api/proxies?group_id={g['id']}", headers=self.auth).json()
+        self.assertEqual(len(listing), 3)
+        for p in listing:
+            self.assertEqual(p["status"], "disabled")
+
+    def test_batch_delete_skips_proxies_bound_to_accounts(self) -> None:
+        # A proxy with an Account.proxy_id pointing at it can't be
+        # hard-deleted without orphaning the FK. Endpoint should return
+        # which ids were protected so the UI can surface it.
+        from backend.app.models.account import Account
+        p1 = self.client.post("/api/proxies", json={
+            "name": "p1", "protocol": "socks5", "host": "1.1.1.1", "port": 9001,
+        }, headers=self.auth).json()
+        p2 = self.client.post("/api/proxies", json={
+            "name": "p2", "protocol": "socks5", "host": "1.1.1.1", "port": 9002,
+        }, headers=self.auth).json()
+        with SessionLocal() as db:
+            acc = Account(tg_user_id="X", session_path="/tmp/x.session",
+                          status="active", enabled=True, proxy_id=p1["id"])
+            db.add(acc); db.commit()
+
+        r = self.client.post("/api/proxies/batch/delete",
+                             json={"ids": [p1["id"], p2["id"]]},
+                             headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["deleted"], 1)
+        self.assertEqual(body["protected_in_use"], [p1["id"]])
+        with SessionLocal() as db:
+            self.assertIsNotNone(db.get(ProxyEndpoint, p1["id"]))
+            self.assertIsNone(db.get(ProxyEndpoint, p2["id"]))
+
     def test_import_text_skips_existing_host_port_user(self) -> None:
         # Re-importing the same list should be a no-op (idempotent).
         text = "1.2.3.4:1080:u:p"

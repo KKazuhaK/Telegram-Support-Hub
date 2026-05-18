@@ -175,6 +175,100 @@ def import_proxies_text(
     }
 
 
+class ProxyBatchUpdate(BaseModel):
+    ids: list[int]
+    status: str | None = None    # active / error / disabled
+    group_id: int | None = None  # null = clear group
+
+
+class ProxyBatchDelete(BaseModel):
+    ids: list[int]
+
+
+@router.post("/batch")
+def batch_update_proxies(
+    payload: ProxyBatchUpdate, db: DbSession, admin: AdminDep,
+) -> dict:
+    """Bulk-apply status / group changes. Either field is optional —
+    e.g. only status to enable/disable a selection without touching
+    grouping. group_id may be explicitly null to un-group."""
+    if not payload.ids:
+        raise HTTPException(status_code=400, detail="ids 不能为空")
+    fields = payload.model_dump(exclude_unset=True, exclude={"ids"})
+    if not fields:
+        raise HTTPException(status_code=400, detail="无可更新字段")
+    updated = db.query(ProxyEndpoint).filter(
+        ProxyEndpoint.id.in_(payload.ids)
+    ).update(fields, synchronize_session=False)
+    write_audit(db, actor=admin, action="proxy.batch_update",
+                target_type="proxy",
+                detail={"ids": payload.ids, "fields": fields})
+    db.commit()
+    return {"updated": int(updated or 0)}
+
+
+@router.post("/batch/delete")
+def batch_delete_proxies(
+    payload: ProxyBatchDelete, db: DbSession, admin: AdminDep,
+) -> dict:
+    """Hard-delete a selection. Proxies bound to accounts are skipped
+    (would orphan the account.proxy_id FK); the caller gets a count
+    of how many actually went away vs. were protected."""
+    if not payload.ids:
+        raise HTTPException(status_code=400, detail="ids 不能为空")
+    from backend.app.models.account import Account
+    protected = {
+        row[0] for row in db.execute(
+            select(Account.proxy_id).where(Account.proxy_id.in_(payload.ids))
+        ).all()
+        if row[0] is not None
+    }
+    deletable = [i for i in payload.ids if i not in protected]
+    deleted = 0
+    if deletable:
+        deleted = db.query(ProxyEndpoint).filter(
+            ProxyEndpoint.id.in_(deletable)
+        ).delete(synchronize_session=False)
+    write_audit(db, actor=admin, action="proxy.batch_delete",
+                target_type="proxy",
+                detail={"requested": len(payload.ids),
+                        "deleted": int(deleted or 0),
+                        "protected_in_use": sorted(protected)})
+    db.commit()
+    return {
+        "deleted": int(deleted or 0),
+        "protected_in_use": sorted(protected),
+    }
+
+
+@router.post("/batch/check")
+def batch_check_proxies(
+    payload: ProxyBatchDelete, db: DbSession, admin: AdminDep,
+) -> dict:
+    """Run a TCP probe against each selected proxy and update its
+    status/latency. Synchronous — keep batches modest (UI uses <=200)."""
+    if not payload.ids:
+        raise HTTPException(status_code=400, detail="ids 不能为空")
+    rows = list(db.scalars(
+        select(ProxyEndpoint).where(ProxyEndpoint.id.in_(payload.ids))
+    ))
+    ok_count = 0
+    fail_count = 0
+    now_iso = datetime.now(UTC).isoformat()
+    for proxy in rows:
+        result = check_tcp(proxy.host, proxy.port)
+        proxy.status = "active" if result.ok else "error"
+        proxy.latency_ms = result.latency_ms
+        proxy.last_error = result.error
+        proxy.last_checked_at = now_iso
+        if result.ok:
+            ok_count += 1
+        else:
+            fail_count += 1
+    db.commit()
+    return {"ok": ok_count, "failed": fail_count, "total": len(rows)}
+
+
 @router.post("/{proxy_id}/check")
 def check_proxy(proxy_id: int, db: DbSession, _: AdminDep) -> dict:
     proxy = db.get(ProxyEndpoint, proxy_id)

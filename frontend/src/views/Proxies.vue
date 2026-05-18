@@ -45,8 +45,33 @@
           <el-button type="primary" @click="openProxyDialog">+ 新增代理</el-button>
           <el-button @click="openImportDialog">📋 批量导入</el-button>
           <el-button :loading="loading" @click="loadItems">刷新</el-button>
+          <!-- Batch actions: visible always, disabled when nothing selected. -->
+          <el-divider direction="vertical" />
+          <span style="font-size:12px;color:#909399">
+            已选 {{ selected.length }}
+          </span>
+          <el-button size="small" :disabled="!selected.length"
+                     :loading="batchChecking" @click="batchCheck">
+            批量检测
+          </el-button>
+          <el-button size="small" :disabled="!selected.length"
+                     @click="batchSetStatus('active')">批量启用</el-button>
+          <el-button size="small" :disabled="!selected.length"
+                     @click="batchSetStatus('disabled')">批量禁用</el-button>
+          <el-button size="small" :disabled="!selected.length"
+                     @click="batchMoveOpen">批量移到分组</el-button>
+          <el-popconfirm
+            :title="`确认删除 ${selected.length} 个代理？已绑定账号的会自动保留。`"
+            @confirm="batchDelete">
+            <template #reference>
+              <el-button size="small" type="danger"
+                         :disabled="!selected.length">批量删除</el-button>
+            </template>
+          </el-popconfirm>
         </div>
-        <el-table :data="items" v-loading="loading" stripe size="small">
+        <el-table :data="items" v-loading="loading" stripe size="small"
+                  @selection-change="onSelectionChange" row-key="id">
+          <el-table-column type="selection" width="42" reserve-selection />
           <el-table-column prop="id" label="ID" width="60" />
           <el-table-column prop="name" label="名称" />
           <el-table-column prop="protocol" label="类型" width="80" />
@@ -134,6 +159,21 @@
     <template #footer>
       <el-button @click="proxyDialog = false">取消</el-button>
       <el-button type="primary" :loading="savingProxy" @click="saveProxy">保存</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="moveDialog" title="批量移到分组" width="380px">
+    <el-form label-width="60px">
+      <el-form-item label="目标">
+        <el-select v-model="moveTargetGroupId" placeholder="不分组（清除分组）"
+                   clearable style="width: 100%">
+          <el-option v-for="g in groups" :key="g.id" :label="g.name" :value="g.id" />
+        </el-select>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="moveDialog = false">取消</el-button>
+      <el-button type="primary" :loading="batchSaving" @click="batchMove">确定</el-button>
     </template>
   </el-dialog>
 
@@ -249,6 +289,70 @@ async function deleteGroup(g) {
 const importDialog = ref(false)
 const importForm = reactive({ protocol: 'socks5', group_id: null, text: '' })
 const importing = ref(false)
+
+const selected = ref([])
+const batchChecking = ref(false)
+const batchSaving = ref(false)
+const moveDialog = ref(false)
+const moveTargetGroupId = ref(null)
+
+function onSelectionChange(rows) {
+  selected.value = rows
+}
+
+const selectedIds = computed(() => selected.value.map((r) => r.id))
+
+async function batchCheck() {
+  batchChecking.value = true
+  try {
+    const { data } = await http.post('/proxies/batch/check', { ids: selectedIds.value })
+    ElMessage.success(`检测完成：${data.ok}/${data.total} 通过`)
+    await loadItems()
+  } finally { batchChecking.value = false }
+}
+
+async function batchSetStatus(status) {
+  batchSaving.value = true
+  try {
+    await http.post('/proxies/batch', { ids: selectedIds.value, status })
+    ElMessage.success(`已${status === 'active' ? '启用' : '禁用'} ${selectedIds.value.length} 个代理`)
+    await loadItems()
+  } finally { batchSaving.value = false }
+}
+
+function batchMoveOpen() {
+  moveTargetGroupId.value = null
+  moveDialog.value = true
+}
+
+async function batchMove() {
+  batchSaving.value = true
+  try {
+    await http.post('/proxies/batch', {
+      ids: selectedIds.value,
+      group_id: moveTargetGroupId.value,
+    })
+    ElMessage.success(`已移动 ${selectedIds.value.length} 个代理`)
+    moveDialog.value = false
+    await loadItems()
+    await loadGroups()
+  } finally { batchSaving.value = false }
+}
+
+async function batchDelete() {
+  batchSaving.value = true
+  try {
+    const { data } = await http.post('/proxies/batch/delete', { ids: selectedIds.value })
+    let msg = `已删除 ${data.deleted} 个代理`
+    if (data.protected_in_use?.length) {
+      msg += `；${data.protected_in_use.length} 个因绑定账号被跳过`
+    }
+    ElMessage.success(msg)
+    selected.value = []
+    await loadItems()
+    await loadGroups()
+  } finally { batchSaving.value = false }
+}
 
 function openImportDialog() {
   importForm.protocol = 'socks5'
