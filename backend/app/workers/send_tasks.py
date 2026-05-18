@@ -111,6 +111,18 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
     now = datetime.now(UTC)
     now_iso = now.isoformat()
 
+    # Per-tick caches to kill N+1 queries inside the message loop.
+    # _account_group was 2 queries per message; hourly_limit COUNT was
+    # 1 query per message. With these tables of size ~tens of accounts,
+    # caching at the start of the tick saves O(batch_size) round-trips.
+    group_cache: dict[int, AccountGroup | None] = {}
+    hourly_count_cache: dict[int, int] = {}
+
+    def _account_group_cached(db, account_id: int) -> AccountGroup | None:
+        if account_id not in group_cache:
+            group_cache[account_id] = _account_group(db, account_id)
+        return group_cache[account_id]
+
     with SessionLocal() as db:
         rows = list(
             db.scalars(
@@ -135,10 +147,12 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
 
             account = db.get(Account, message.account_id) if message.account_id else None
             if not account or not account.enabled or account.status not in {"active", "imported"}:
-                # Account got disabled mid-campaign (e.g. PeerFlood auto-
-                # kill) — before declaring this message dead, try to
-                # reroute it to a sibling account in the same campaign's
-                # groups. Next tick picks it up with the new account_id.
+                # Flush so the alternate-account lookup sees any
+                # account.enabled=False writes from earlier iterations
+                # of THIS tick (otherwise a freshly-killed account is
+                # still visible to the candidate query → reroute picks
+                # the just-disabled survivor).
+                db.flush()
                 alt = _find_alternate_account(db, campaign, message.account_id)
                 if alt:
                     message.account_id = alt.id
@@ -159,7 +173,7 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
                 message.next_run_at = next_run_after_failure(now, view).isoformat()
                 continue
 
-            group = _account_group(db, account.id)
+            group = _account_group_cached(db, account.id)
             if group and not group.enabled:
                 message.next_run_at = next_run_after_failure(now, view).isoformat()
                 continue
@@ -172,21 +186,25 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
                 continue
 
             # Hourly throttle. Counts actually-sent rows in the last
-            # hour for this account — no extra column / no celery reset
-            # task to keep in sync. None means uncapped.
+            # hour for this account, cached per-tick to avoid N COUNT
+            # queries per batch. None means uncapped.
             if account.hourly_limit:
-                from datetime import timedelta as _td
-                hour_ago = (now - _td(hours=1)).isoformat()
-                sent_last_hour = db.scalar(
-                    select(func.count(MessageRecord.id))
-                    .where(MessageRecord.account_id == account.id)
-                    .where(MessageRecord.direction == "outbound")
-                    .where(MessageRecord.sent_at.isnot(None))
-                    .where(MessageRecord.sent_at >= hour_ago)
-                ) or 0
-                if sent_last_hour >= account.hourly_limit:
+                if account.id not in hourly_count_cache:
+                    from datetime import timedelta as _td
+                    hour_ago = (now - _td(hours=1)).isoformat()
+                    hourly_count_cache[account.id] = db.scalar(
+                        select(func.count(MessageRecord.id))
+                        .where(MessageRecord.account_id == account.id)
+                        .where(MessageRecord.direction == "outbound")
+                        .where(MessageRecord.sent_at.isnot(None))
+                        .where(MessageRecord.sent_at >= hour_ago)
+                    ) or 0
+                if hourly_count_cache[account.id] >= account.hourly_limit:
                     message.next_run_at = next_run_after_failure(now, view).isoformat()
                     continue
+                # Reserve the slot inside this tick so subsequent
+                # messages on the same account see the bumped count.
+                hourly_count_cache[account.id] += 1
 
             target = _resolve_target(message)
             if not target:
@@ -200,6 +218,11 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
             ttl = lock_ttl_seconds(view, padding=settings.dispatch_lock_ttl_padding)
             with account_send_lock(account.id, ttl) as got_lock:
                 if not got_lock:
+                    # Bump next_run_at so the next tick doesn't re-pick
+                    # this row immediately. Without this the same hot
+                    # account spins the worker → redis QPS spike + log
+                    # spam of "skipped_locked".
+                    message.next_run_at = next_run_after_failure(now, view).isoformat()
                     skipped_locked += 1
                     continue
 
@@ -290,16 +313,29 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
                             account.status = "limited"
                             account.last_error = result.error_message
 
+                # Commit BEFORE releasing the lock so a crash between
+                # release and the end-of-batch commit can't leave the
+                # message visible-as-queued in another worker's snapshot
+                # — that worker would re-pick + double-send. With the
+                # commit inside the with-block, by the time the lock is
+                # free, the row's terminal state is already durable.
+                db.commit()
+
             processed += 1
 
-        # Mark campaigns whose queue is exhausted as terminal. Scan ALL
-        # running campaigns, not just the ones touched this tick — if
-        # the last message of a campaign was processed in a prior tick
-        # (and no further messages exist), restricting to active_ids
-        # leaves the campaign stuck on 'running' forever.
+        # Mark BROADCAST campaigns whose queue is exhausted as terminal.
+        # Scan all running broadcast campaigns (not just ones touched
+        # this tick) so a campaign that ran out of messages in a prior
+        # tick still transitions. batch_op / modify_info kinds are
+        # excluded — they never queue MessageRecord rows, so the
+        # has_pending=None check would flip them to 'completed'
+        # prematurely (execute_operation_campaign handles their state
+        # itself).
         db.flush()  # make the just-mutated row statuses visible to the next select
         running_campaigns = list(db.scalars(
-            select(Campaign).where(Campaign.status == "running")
+            select(Campaign)
+            .where(Campaign.status == "running")
+            .where(Campaign.task_kind == "broadcast")
         ))
         for cmp in running_campaigns:
             has_pending = db.scalar(

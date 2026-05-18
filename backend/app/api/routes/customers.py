@@ -26,19 +26,22 @@ router = APIRouter()
 
 
 class CustomerImport(BaseModel):
-    text: str
-    source: str | None = None
+    # ~5MB worth of phone lines (avg 20 chars/line = 250k rows). Past
+    # this the request stays in memory long enough to OOM-pressure the
+    # API process; chunk on the client.
+    text: str = Field(max_length=5_000_000)
+    source: str | None = Field(default=None, max_length=120)
     assume_consent: bool = False
     # Optionally distribute the freshly created (consented) rows to accounts
     # in these groups in the same transaction. None / empty = skip assignment.
-    account_group_ids: list[int] | None = None
-    max_per_account: int | None = None
+    account_group_ids: list[int] | None = Field(default=None, max_length=100)
+    max_per_account: int | None = Field(default=None, ge=1, le=10000)
 
 
 class CustomerAssign(BaseModel):
-    customer_ids: list[int] | None = None
-    account_group_ids: list[int] | None = None
-    max_per_account: int | None = None
+    customer_ids: list[int] | None = Field(default=None, max_length=100_000)
+    account_group_ids: list[int] | None = Field(default=None, max_length=100)
+    max_per_account: int | None = Field(default=None, ge=1, le=10000)
     only_unassigned: bool = True
 
 
@@ -46,13 +49,13 @@ class CustomerUpdate(BaseModel):
     """Editable fields. phone is deliberately not here — it's the dedup key
     and changing it would break audit trails and template-rendered messages
     that already captured the old phone in body_snapshot."""
-    name: str | None = None
-    tags: list[str] | None = None
-    source: str | None = None
+    name: str | None = Field(default=None, max_length=120)
+    tags: list[str] | None = Field(default=None, max_length=50)
+    source: str | None = Field(default=None, max_length=120)
     consent: bool | None = None
-    status: str | None = None
+    status: str | None = Field(default=None, max_length=32)
     assigned_account_id: int | None = None
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=5000)
 
 
 def _scope_accounts_to_user(db, user, account_group_ids: list[int] | None) -> list[int] | None:

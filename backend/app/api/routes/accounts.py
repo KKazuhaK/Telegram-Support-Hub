@@ -52,7 +52,7 @@ BATCH_ALLOWED_STATUSES = {"active", "paused", "limited", "error", "imported", "a
 
 
 class AccountBatch(BaseModel):
-    ids: list[int] = Field(min_length=1)
+    ids: list[int] = Field(min_length=1, max_length=1000)
     enabled: bool | None = None
     status: str | None = None
     # Bulk-bind / unbind proxy. proxy_id=null + clear_proxy=true → unbind.
@@ -65,7 +65,7 @@ class AccountBatch(BaseModel):
 
 
 class AccountBatchDelete(BaseModel):
-    ids: list[int] = Field(min_length=1)
+    ids: list[int] = Field(min_length=1, max_length=1000)
 
 
 def safe_part(value: str) -> str:
@@ -272,7 +272,14 @@ async def import_zip(
             detail=f"账号分组 #{group_id} 不存在，请先在「账号分组」页创建",
         )
 
+    # Bounded upload: a session zip is ~tens of KB per account, so 64MB
+    # comfortably covers a 1000-account batch. Caps protect the API from
+    # OOM and zip-bomb amplification on the (admin-only) endpoint.
+    MAX_UPLOAD_BYTES = 64 * 1024 * 1024       # 64MB
+    MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024  # 4x ratio cap
     content = await sessions.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="上传文件超过 64MB")
     imported: list[dict] = []
     skipped: list[dict] = []
 
@@ -280,9 +287,23 @@ async def import_zip(
         zf = zipfile.ZipFile(BytesIO(content))
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="ZIP 文件损坏或格式不正确") from exc
+    # Zip-bomb guard: sum the uncompressed sizes from the central
+    # directory and reject if the ratio is absurd. ZipInfo.file_size is
+    # the header-declared uncompressed size; trustworthy enough for an
+    # admin-only path with a generous ceiling.
+    total_uncompressed = sum(info.file_size for info in zf.infolist())
+    if total_uncompressed > MAX_DECOMPRESSED_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"ZIP 解压后超过 {MAX_DECOMPRESSED_BYTES // (1024*1024)}MB，疑似 zip-bomb",
+        )
 
     proxy_assigned_count = 0
     proxy_skipped_no_pool = 0
+    # Track every freshly-written session path so we can unlink them if
+    # the final commit fails — otherwise orphan auth_key files sit on
+    # disk forever with no DB row to reference them.
+    written_paths: list[Path] = []
 
     def _persist_session(stem: str, is_subfolder: bool, meta: dict,
                          filename: str, session_bytes: bytes,
@@ -296,6 +317,7 @@ async def import_zip(
         account_dir.mkdir(parents=True, exist_ok=True)
         session_path = account_dir / safe_filename
         session_path.write_bytes(session_bytes)
+        written_paths.append(session_path)
 
         account = db.scalar(select(Account).where(Account.tg_user_id == tg_user_id))
         if not account and phone:
@@ -406,7 +428,20 @@ async def import_zip(
 
     write_audit(db, actor=admin, action="account.import_zip",
                 detail={"imported": len(imported), "skipped": len(skipped)})
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        # Commit failed → no DB rows persist, but we already wrote
+        # session bytes to disk. Unlink them so we don't leave orphan
+        # auth_key files lying around. Then re-raise so FastAPI returns
+        # 500 to the operator instead of pretending success.
+        db.rollback()
+        for path in written_paths:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        raise
     return {
         "imported": imported,
         "skipped": skipped,

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from backend.app.api.deps import AdminDep, DbSession
@@ -15,29 +15,29 @@ router = APIRouter()
 
 
 class ProxyCreate(BaseModel):
-    name: str
+    name: str = Field(max_length=120)
     protocol: str = "socks5"
-    host: str
-    port: int
-    username: str | None = None
-    password: str | None = None
-    country: str | None = None
-    max_accounts: int | None = None
-    remark: str | None = None
+    host: str = Field(max_length=255)
+    port: int = Field(ge=1, le=65535)
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=500)
+    country: str | None = Field(default=None, max_length=80)
+    max_accounts: int | None = Field(default=None, ge=1, le=10000)
+    remark: str | None = Field(default=None, max_length=2000)
     group_id: int | None = None
 
 
 class ProxyUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=120)
     protocol: str | None = None
-    host: str | None = None
-    port: int | None = None
-    username: str | None = None
-    password: str | None = None
-    country: str | None = None
+    host: str | None = Field(default=None, max_length=255)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=500)
+    country: str | None = Field(default=None, max_length=80)
     status: str | None = None
-    max_accounts: int | None = None
-    remark: str | None = None
+    max_accounts: int | None = Field(default=None, ge=1, le=10000)
+    remark: str | None = Field(default=None, max_length=2000)
     group_id: int | None = None
 
 
@@ -107,7 +107,7 @@ def update_proxy(proxy_id: int, payload: ProxyUpdate, db: DbSession, admin: Admi
 
 
 class ProxyBulkImport(BaseModel):
-    text: str
+    text: str = Field(max_length=200_000)  # ~3-4k proxy lines is plenty
     protocol: str = "socks5"
     group_id: int | None = None
 
@@ -125,6 +125,8 @@ def _parse_proxy_line(line: str) -> dict | None:
     try:
         port = int(parts[1])
     except (ValueError, TypeError):
+        return None
+    if not (1 <= port <= 65535):
         return None
     username = parts[2] if len(parts) >= 3 else None
     password = parts[3] if len(parts) >= 4 else None
@@ -192,13 +194,13 @@ def import_proxies_text(
 
 
 class ProxyBatchUpdate(BaseModel):
-    ids: list[int]
+    ids: list[int] = Field(min_length=1, max_length=1000)
     status: str | None = None    # active / error / disabled
     group_id: int | None = None  # null = clear group
 
 
 class ProxyBatchDelete(BaseModel):
-    ids: list[int]
+    ids: list[int] = Field(min_length=1, max_length=1000)
 
 
 @router.post("/batch")

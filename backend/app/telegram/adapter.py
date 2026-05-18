@@ -226,6 +226,7 @@ class TelegramAdapter:
         'database is locked'. Working on a copy avoids the lock without
         coordinating between containers.
         """
+        import os as _os
         import shutil
         import tempfile
         if not Path(account.session_path).exists():
@@ -235,9 +236,21 @@ class TelegramAdapter:
         fd = tempfile.NamedTemporaryFile(suffix=".session", delete=False,
                                          prefix=f"send-{account.id}-")
         fd.close()
-        shutil.copyfile(account.session_path, fd.name)
-        client = self._build_client(account, proxy, session_path=fd.name)
-        return client, fd.name
+        tmp_name = fd.name
+        try:
+            shutil.copyfile(account.session_path, tmp_name)
+            # _build_client (TelegramClient constructor) can raise on
+            # bad proxy tuples or imported-but-broken telethon — unlink
+            # the temp on failure so /tmp doesn't accumulate session
+            # files with auth_key bytes inside.
+            client = self._build_client(account, proxy, session_path=tmp_name)
+        except Exception:
+            try:
+                _os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+        return client, tmp_name
 
     async def validate_session(
         self, account: Account, proxy: ProxyEndpoint | None = None
