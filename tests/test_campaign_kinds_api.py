@@ -125,6 +125,62 @@ class BatchOperationCampaignTestCase(unittest.TestCase):
         r = self.client.get("/api/campaigns/99999/operation-runs", headers=self.auth)
         self.assertEqual(r.status_code, 404)
 
+    def test_requeue_failed_resets_recoverable_messages_only(self) -> None:
+        from backend.app.models.account import Account as Acc
+        from backend.app.models.customer import Customer
+        from backend.app.models.message import MessageRecord
+        with SessionLocal() as db:
+            group, tpl = _seed_group_and_template(db)
+            account = db.query(Acc).first()
+            camp = Campaign(name="rq", template_id=tpl.id, status="failed",
+                            task_kind="broadcast", target_type="customer_broadcast",
+                            account_group_ids=[group.id], failed_count=3)
+            db.add(camp); db.flush()
+            cid = camp.id
+            # Three failed rows: one recoverable, one fatal (ValueError),
+            # one already-sent (should be left alone).
+            db.add(MessageRecord(
+                campaign_id=cid, account_id=account.id, body_snapshot="x",
+                status="failed", error_code="account_unavailable",
+                error_message="no active account assigned",
+                attempt_count=3, direction="outbound",
+            ))
+            db.add(MessageRecord(
+                campaign_id=cid, account_id=account.id, body_snapshot="x",
+                status="failed_permanent", error_code="ValueError",
+                error_message="+xxx 不是 Telegram 注册号",
+                attempt_count=1, direction="outbound",
+            ))
+            db.add(MessageRecord(
+                campaign_id=cid, account_id=account.id, body_snapshot="x",
+                status="sent", attempt_count=1, direction="outbound",
+            ))
+            db.commit()
+
+        r = self.client.post(f"/api/campaigns/{cid}/requeue-failed", headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["requeued"], 1)
+
+        with SessionLocal() as db:
+            rows = db.query(MessageRecord).filter_by(campaign_id=cid).all()
+            requeued = [m for m in rows if m.status == "queued"]
+            fatal = [m for m in rows if m.status == "failed_permanent"]
+            sent = [m for m in rows if m.status == "sent"]
+            self.assertEqual(len(requeued), 1)
+            self.assertIsNone(requeued[0].error_code)
+            self.assertIsNone(requeued[0].error_message)
+            self.assertEqual(requeued[0].attempt_count, 0)
+            # ValueError row left as terminal — not safe to retry.
+            self.assertEqual(len(fatal), 1)
+            self.assertEqual(fatal[0].error_code, "ValueError")
+            # Already-sent row untouched.
+            self.assertEqual(len(sent), 1)
+            # Campaign popped out of terminal back into running.
+            cmp = db.get(Campaign, cid)
+            self.assertEqual(cmp.status, "running")
+            self.assertIsNone(cmp.completed_at)
+            self.assertEqual(cmp.failed_count, 2)  # was 3, minus the 1 requeued
+
     def test_preflight_returns_severity_and_counts(self) -> None:
         # Regression for a NameError: preflight uses func.count() but the
         # `func` import was missing → endpoint 500'd on every form change.

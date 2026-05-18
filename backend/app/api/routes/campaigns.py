@@ -486,6 +486,59 @@ def list_campaign_messages(campaign_id: int, db: DbSession, _: CurrentUserDep, l
     return list_dict(rows)
 
 
+RECOVERABLE_ERROR_CODES = {
+    "account_unavailable",   # auto-reroute will pick another account
+    "flood_wait",            # account cooled down, send_worker tries again
+    "no_target",             # transient — message data may have been fixed
+}
+
+
+@router.post("/{campaign_id}/requeue-failed")
+def requeue_failed(
+    campaign_id: int, db: DbSession, user: CurrentUserDep,
+) -> dict:
+    """Re-queue messages in this campaign that failed for a recoverable
+    reason — the user gives them another shot via the worker's normal
+    flow (now including auto-reroute). Fatal errors (ValueError /
+    PhoneNotOccupied / etc., i.e. target really isn't on TG) are left
+    alone so the operator doesn't pay ImportContacts quota to retry
+    something that will never work."""
+    if not can_write_tenant_data(user):
+        raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
+    campaign = db.get(Campaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    rows = list(db.scalars(
+        select(MessageRecord)
+        .where(MessageRecord.campaign_id == campaign_id)
+        .where(MessageRecord.status.in_(["failed", "failed_permanent"]))
+        .where(MessageRecord.error_code.in_(RECOVERABLE_ERROR_CODES))
+    ))
+    if not rows:
+        return {"requeued": 0, "reason": "no recoverable failures"}
+    for m in rows:
+        m.status = "queued"
+        m.error_code = None
+        m.error_message = None
+        m.next_run_at = None
+        m.attempt_count = 0
+    # Counters need to be rolled back so the campaign's failed_count
+    # doesn't include the re-queued rows. If they fail again, the
+    # worker will re-increment.
+    campaign.failed_count = max(0, (campaign.failed_count or 0) - len(rows))
+    # The campaign may have transitioned to a terminal state (failed /
+    # partially_failed / completed). Flip it back to running so the
+    # supervisor scans it again.
+    if campaign.status in {"failed", "partially_failed", "completed"}:
+        campaign.status = "running"
+        campaign.completed_at = None
+    write_audit(db, actor=user, action="campaign.requeue_failed",
+                target_type="campaign", target_id=campaign_id,
+                detail={"count": len(rows)})
+    db.commit()
+    return {"requeued": len(rows)}
+
+
 @router.get("/{campaign_id}/operation-runs")
 def list_operation_runs(
     campaign_id: int, db: DbSession, _: CurrentUserDep,

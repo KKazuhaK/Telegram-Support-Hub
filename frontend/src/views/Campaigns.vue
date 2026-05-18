@@ -74,6 +74,11 @@
     </el-table>
     <template #footer>
       <el-button @click="loadRuns" :loading="runsLoading">刷新</el-button>
+      <el-button :loading="requeuing"
+                 :disabled="!hasRecoverableFailures"
+                 @click="requeueFailed">
+        重新入队失败号
+      </el-button>
       <el-button @click="runsDialog = false">关闭</el-button>
     </template>
   </el-dialog>
@@ -378,6 +383,26 @@ async function loadRuns() {
     })
     runs.value = data || []
   } finally { runsLoading.value = false }
+}
+
+const RECOVERABLE_ERRORS = ['account_unavailable', 'flood_wait', 'no_target']
+const hasRecoverableFailures = computed(() => runs.value.some((r) => (
+  ['failed', 'failed_permanent'].includes(r.status)
+  && RECOVERABLE_ERRORS.includes(r.error_code)
+)))
+
+const requeuing = ref(false)
+async function requeueFailed() {
+  if (!runsTarget.value) return
+  requeuing.value = true
+  try {
+    const { data } = await http.post(
+      `/campaigns/${runsTarget.value.id}/requeue-failed`,
+    )
+    ElMessage.success(`已重新入队 ${data.requeued} 条消息`)
+    await loadRuns()
+    await load()  // refresh list to show updated status / counters
+  } finally { requeuing.value = false }
 }
 
 function formatRetry(iso) {
