@@ -232,6 +232,43 @@ class ProxyGroupsApiTestCase(unittest.TestCase):
         for p in listing:
             self.assertEqual(p["status"], "disabled")
 
+    def test_batch_delete_handles_account_proxy_log_fk(self) -> None:
+        # AccountProxyLog rows referencing a deleted proxy used to 500
+        # the batch delete (FK constraint, no cascade). Verify the
+        # log's FK gets nulled and the proxy actually goes away.
+        from backend.app.models.account import Account
+        from backend.app.models.proxy import AccountProxyLog
+        p = self.client.post("/api/proxies", json={
+            "name": "p", "protocol": "socks5", "host": "8.8.8.8", "port": 1080,
+        }, headers=self.auth).json()
+        with SessionLocal() as db:
+            acc = Account(tg_user_id="logacc", session_path="/tmp/logacc.session",
+                          status="active", enabled=True)
+            db.add(acc); db.flush()
+            db.add(AccountProxyLog(
+                account_id=acc.id, old_proxy_id=None,
+                new_proxy_id=p["id"], action="bind", reason="initial",
+            ))
+            db.add(AccountProxyLog(
+                account_id=acc.id, old_proxy_id=p["id"],
+                new_proxy_id=None, action="unbind", reason="cleanup",
+            ))
+            db.commit()
+
+        r = self.client.post("/api/proxies/batch/delete",
+                             json={"ids": [p["id"]]},
+                             headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["deleted"], 1)
+        with SessionLocal() as db:
+            self.assertIsNone(db.get(ProxyEndpoint, p["id"]))
+            # Log rows survive but their proxy refs are NULL.
+            logs = db.query(AccountProxyLog).all()
+            self.assertEqual(len(logs), 2)
+            for log in logs:
+                self.assertIsNone(log.old_proxy_id)
+                self.assertIsNone(log.new_proxy_id)
+
     def test_batch_delete_skips_proxies_bound_to_accounts(self) -> None:
         # A proxy with an Account.proxy_id pointing at it can't be
         # hard-deleted without orphaning the FK. Endpoint should return

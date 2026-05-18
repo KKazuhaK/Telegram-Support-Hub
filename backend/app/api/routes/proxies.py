@@ -226,6 +226,18 @@ def batch_delete_proxies(
     deletable = [i for i in payload.ids if i not in protected]
     deleted = 0
     if deletable:
+        # AccountProxyLog.{old,new}_proxy_id FKs into us with no
+        # cascade — old audit rows would block the delete with an
+        # IntegrityError → 500. Null them out first; the log row
+        # keeps its account_id + reason + timestamp, just loses the
+        # proxy pointer (which is fine, the proxy is gone anyway).
+        from backend.app.models.proxy import AccountProxyLog
+        db.query(AccountProxyLog).filter(
+            AccountProxyLog.old_proxy_id.in_(deletable)
+        ).update({"old_proxy_id": None}, synchronize_session=False)
+        db.query(AccountProxyLog).filter(
+            AccountProxyLog.new_proxy_id.in_(deletable)
+        ).update({"new_proxy_id": None}, synchronize_session=False)
         deleted = db.query(ProxyEndpoint).filter(
             ProxyEndpoint.id.in_(deletable)
         ).delete(synchronize_session=False)
