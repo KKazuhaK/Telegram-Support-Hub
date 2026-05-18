@@ -72,12 +72,28 @@ def create_proxy(payload: ProxyCreate, db: DbSession, admin: AdminDep) -> dict:
     return to_dict(proxy)
 
 
+ALLOWED_PROXY_STATUSES = {"unchecked", "active", "error", "disabled"}
+ALLOWED_PROXY_PROTOCOLS = {"socks5", "socks4", "http", "https"}
+
+
 @router.patch("/{proxy_id}")
 def update_proxy(proxy_id: int, payload: ProxyUpdate, db: DbSession, admin: AdminDep) -> dict:
     proxy = db.get(ProxyEndpoint, proxy_id)
     if not proxy:
         raise HTTPException(status_code=404, detail="代理不存在")
     values = payload.model_dump(exclude_unset=True)
+    if "status" in values and values["status"] not in ALLOWED_PROXY_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status 必须是 {sorted(ALLOWED_PROXY_STATUSES)} 之一",
+        )
+    if "protocol" in values and values["protocol"] not in ALLOWED_PROXY_PROTOCOLS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"protocol 必须是 {sorted(ALLOWED_PROXY_PROTOCOLS)} 之一",
+        )
+    if "port" in values and values["port"] is not None and not (1 <= values["port"] <= 65535):
+        raise HTTPException(status_code=400, detail="port 必须在 1-65535 之间")
     if "password" in values:
         values["password_encrypted"] = encrypt_secret(values.pop("password"))
     for key, value in values.items():

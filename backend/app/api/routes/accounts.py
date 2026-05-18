@@ -543,6 +543,18 @@ def update_account(account_id: int, payload: AccountUpdate, db: DbSession, admin
     if not account:
         raise HTTPException(status_code=404, detail="TG 账号不存在")
     values = payload.model_dump(exclude_unset=True)
+    # Status whitelist — same set as the batch path. Without this any
+    # admin could PATCH status to an arbitrary string and break worker
+    # filters (e.g. status='active' on an unauthorized session).
+    if "status" in values and values["status"] not in BATCH_ALLOWED_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status 必须是 {sorted(BATCH_ALLOWED_STATUSES)} 之一",
+        )
+    if "daily_limit" in values and values["daily_limit"] is not None and values["daily_limit"] < 0:
+        raise HTTPException(status_code=400, detail="daily_limit 不能为负")
+    if "hourly_limit" in values and values["hourly_limit"] is not None and values["hourly_limit"] < 0:
+        raise HTTPException(status_code=400, detail="hourly_limit 不能为负")
     for key, value in values.items():
         setattr(account, key, value)
     write_audit(db, actor=admin, action="account.update",

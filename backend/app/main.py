@@ -20,13 +20,22 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # CORS: pin to operator-configured origins. Empty CORS_ALLOW_ORIGINS
+    # = no middleware (same-origin only). Wildcard "*" is allowed but
+    # forces allow_credentials=False because the browser rejects the
+    # pair anyway; using "*" + credentials would silently devolve to
+    # echoing arbitrary Origin headers.
+    raw = settings.cors_allow_origins.strip()
+    if raw:
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+        with_credentials = origins != ["*"]
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=with_credentials,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     @app.get("/health")
     def health() -> dict[str, str]:

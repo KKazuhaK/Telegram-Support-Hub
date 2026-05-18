@@ -405,9 +405,9 @@ def cancel_campaign(campaign_id: int, db: DbSession, user: CurrentUserDep) -> di
 class PreflightPayload(BaseModel):
     task_kind: str = "broadcast"
     target_type: str = "customer_broadcast"
-    account_group_ids: list[int] = Field(default_factory=list)
-    customer_ids: list[int] | None = None
-    imported_targets_count: int = 0
+    account_group_ids: list[int] = Field(default_factory=list, max_length=100)
+    customer_ids: list[int] | None = Field(default=None, max_length=10000)
+    imported_targets_count: int = Field(default=0, ge=0, le=1_000_000)
 
 
 @router.post("/preflight")
@@ -438,7 +438,10 @@ def preflight(payload: PreflightPayload, db: DbSession, user: CurrentUserDep) ->
     if payload.target_type == "imported_target_broadcast":
         target_count = max(0, int(payload.imported_targets_count))
     elif payload.target_type == "customer_broadcast":
+        # Apply tenant scope so the count can't be used to probe
+        # cross-tenant customer existence by guessing ids.
         q = select(func.count(Customer.id)).where(Customer.consent.is_(True))
+        q = apply_merchant_scope(q, user, db, Customer)
         if payload.customer_ids:
             q = q.where(Customer.id.in_(payload.customer_ids))
         target_count = db.scalar(q) or 0
@@ -473,7 +476,11 @@ def preflight(payload: PreflightPayload, db: DbSession, user: CurrentUserDep) ->
 
 
 @router.get("/{campaign_id}/messages")
-def list_campaign_messages(campaign_id: int, db: DbSession, _: CurrentUserDep, limit: int = 100, offset: int = 0) -> list[dict]:
+def list_campaign_messages(
+    campaign_id: int, db: DbSession, user: CurrentUserDep,
+    limit: int = 100, offset: int = 0,
+) -> list[dict]:
+    _get_campaign_with_perm(db, user, campaign_id)
     rows = list(
         db.scalars(
             select(MessageRecord)
@@ -505,9 +512,7 @@ def requeue_failed(
     something that will never work."""
     if not can_write_tenant_data(user):
         raise HTTPException(status_code=403, detail=permission_denied_detail("can_broadcast"))
-    campaign = db.get(Campaign, campaign_id)
-    if not campaign:
-        raise HTTPException(status_code=404, detail="任务不存在")
+    campaign = _get_campaign_with_perm(db, user, campaign_id)
     rows = list(db.scalars(
         select(MessageRecord)
         .where(MessageRecord.campaign_id == campaign_id)
@@ -541,7 +546,7 @@ def requeue_failed(
 
 @router.get("/{campaign_id}/operation-runs")
 def list_operation_runs(
-    campaign_id: int, db: DbSession, _: CurrentUserDep,
+    campaign_id: int, db: DbSession, user: CurrentUserDep,
     limit: int = 500, offset: int = 0,
 ) -> list[dict]:
     """Per-account run results for a batch_op / modify_info campaign.
@@ -555,9 +560,7 @@ def list_operation_runs(
     from backend.app.models.account import Account
     from backend.app.models.audit import AuditLog
 
-    campaign = db.get(Campaign, campaign_id)
-    if not campaign:
-        raise HTTPException(status_code=404, detail="任务不存在")
+    campaign = _get_campaign_with_perm(db, user, campaign_id)
     rows = list(db.scalars(
         select(AuditLog)
         .where(AuditLog.target_type == "account")

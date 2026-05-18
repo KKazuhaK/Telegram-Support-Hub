@@ -51,6 +51,12 @@ class Settings:
     dispatch_batch_size: int = _int_env("DISPATCH_BATCH_SIZE", 50)
     dispatch_lock_ttl_padding: int = _int_env("DISPATCH_LOCK_TTL_PADDING", 30)
     max_failed_attempts: int = _int_env("MAX_FAILED_ATTEMPTS", 3)
+    # Comma-separated origins permitted by the CORS middleware.
+    # Production deployments MUST pin this to actual frontend hosts —
+    # pairing "*" with allow_credentials=True is rejected by browsers
+    # and degrades to echoing arbitrary Origin headers (security risk).
+    # Empty value disables CORS entirely (safest for same-origin deploys).
+    cors_allow_origins: str = os.getenv("CORS_ALLOW_ORIGINS", "")
 
     @cached_property
     def database_url(self) -> URL:
