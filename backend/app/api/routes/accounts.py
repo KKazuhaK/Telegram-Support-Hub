@@ -255,6 +255,8 @@ async def import_zip(
     db: DbSession, admin: AdminDep,
     sessions: UploadFile = File(...),
     group_id: int = Form(...),
+    proxy_group_id: int | None = Form(None),
+    max_accounts_per_proxy: int | None = Form(None),
 ) -> dict:
     if not sessions.filename or not sessions.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="请上传 .zip 后缀的 session 压缩包")
@@ -279,11 +281,15 @@ async def import_zip(
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="ZIP 文件损坏或格式不正确") from exc
 
+    proxy_assigned_count = 0
+    proxy_skipped_no_pool = 0
+
     def _persist_session(stem: str, is_subfolder: bool, meta: dict,
                          filename: str, session_bytes: bytes,
                          source_label: str) -> None:
         """Common path: write session bytes under session_dir, upsert
         Account + AccountGroupMember, append to `imported` log."""
+        nonlocal proxy_assigned_count, proxy_skipped_no_pool
         tg_user_id, phone = _resolve_account_identity(stem, is_subfolder, meta)
         safe_filename = safe_part(filename)
         account_dir = settings.session_dir / stem
@@ -294,6 +300,7 @@ async def import_zip(
         account = db.scalar(select(Account).where(Account.tg_user_id == tg_user_id))
         if not account and phone:
             account = db.scalar(select(Account).where(Account.phone == phone))
+        is_new = account is None
         if not account:
             account = Account(
                 tg_user_id=tg_user_id, session_path=str(session_path),
@@ -310,6 +317,20 @@ async def import_zip(
                 account.status = "imported"
             if phone and not account.phone:
                 account.phone = phone
+        # Auto-assign proxy from the chosen proxy group, respecting the
+        # per-proxy account cap. Only touches accounts that don't yet
+        # have a proxy bound (re-imports preserve existing assignments).
+        if proxy_group_id is not None and account.proxy_id is None:
+            from backend.app.services.proxy_pool import auto_assign_proxy, PoolError
+            try:
+                auto_assign_proxy(
+                    db, account,
+                    group_id=proxy_group_id,
+                    max_per_proxy_override=max_accounts_per_proxy,
+                )
+                proxy_assigned_count += 1
+            except PoolError:
+                proxy_skipped_no_pool += 1
         imported.append({"user_id": tg_user_id, "file": source_label})
 
     # ---- 1) Telegram Desktop tdata layout ----
@@ -386,7 +407,12 @@ async def import_zip(
     write_audit(db, actor=admin, action="account.import_zip",
                 detail={"imported": len(imported), "skipped": len(skipped)})
     db.commit()
-    return {"imported": imported, "skipped": skipped}
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "proxy_assigned": proxy_assigned_count,
+        "proxy_no_pool": proxy_skipped_no_pool,
+    }
 
 
 @router.post("/batch")

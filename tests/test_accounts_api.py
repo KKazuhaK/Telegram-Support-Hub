@@ -9,6 +9,8 @@ SessionLocal = support.install_sqlite_session()
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
+from sqlalchemy import select
+
 from backend.app.models.account import Account, AccountGroup, AccountGroupMember
 from backend.app.models.agent import SupportAgent, SupportAgentGroupPermission
 from backend.app.models.proxy import AccountProxyLog
@@ -310,6 +312,88 @@ class ImportZipFlatLayoutTestCase(unittest.TestCase):
         )
         self.assertEqual(r.status_code, 400)
         self.assertIn("不存在", r.json()["detail"])
+
+    def test_import_zip_auto_assigns_proxy_from_chosen_group(self) -> None:
+        # Operator passes proxy_group_id + max_accounts_per_proxy at
+        # import time. New accounts should round-robin across the
+        # group's proxies, respecting the cap.
+        from backend.app.models.proxy import ProxyEndpoint
+        from backend.app.models.data_groups import ProxyGroup
+        with SessionLocal() as db:
+            pgroup = ProxyGroup(name="pg", remark="")
+            db.add(pgroup); db.flush()
+            for i in range(2):
+                db.add(ProxyEndpoint(
+                    name=f"px{i}", protocol="socks5", host=f"10.0.0.{i+1}",
+                    port=1080, status="active", group_id=pgroup.id,
+                ))
+            db.commit()
+            pg_id = pgroup.id
+
+        gid = _make_group("ap")
+        zip_bytes = _make_zip({
+            "1001.session": b"x",
+            "1002.session": b"x",
+            "1003.session": b"x",
+        })
+        r = self.client.post(
+            "/api/accounts/import-zip",
+            files={"sessions": ("s.zip", zip_bytes, "application/zip")},
+            data={
+                "group_id": str(gid),
+                "proxy_group_id": str(pg_id),
+                "max_accounts_per_proxy": "2",
+            },
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        # 3 accounts, cap 2 per proxy, 2 proxies → 2 proxies fully used.
+        # round-robin (least-loaded first): 1st acct → proxy A, 2nd →
+        # proxy B, 3rd → proxy A (now both full).
+        self.assertEqual(body["proxy_assigned"], 3)
+        self.assertEqual(body["proxy_no_pool"], 0)
+        with SessionLocal() as db:
+            from sqlalchemy import func
+            loads = dict(db.execute(
+                select(Account.proxy_id, func.count(Account.id))
+                .where(Account.proxy_id.isnot(None))
+                .group_by(Account.proxy_id)
+            ).all())
+            self.assertEqual(sum(loads.values()), 3)
+            # Each proxy got at most 2 accounts (the cap).
+            self.assertTrue(all(v <= 2 for v in loads.values()))
+
+    def test_import_zip_reports_no_pool_when_proxies_exhausted(self) -> None:
+        # If every proxy in the chosen group is already at cap, new
+        # accounts come in without a proxy and the count surfaces.
+        from backend.app.models.proxy import ProxyEndpoint
+        from backend.app.models.data_groups import ProxyGroup
+        with SessionLocal() as db:
+            pgroup = ProxyGroup(name="pg2", remark="")
+            db.add(pgroup); db.flush()
+            db.add(ProxyEndpoint(
+                name="px", protocol="socks5", host="10.0.0.99",
+                port=1080, status="active", group_id=pgroup.id,
+                max_accounts=1,
+            ))
+            db.commit()
+            pg_id = pgroup.id
+
+        gid = _make_group("ap2")
+        zip_bytes = _make_zip({
+            "2001.session": b"x", "2002.session": b"x",
+        })
+        r = self.client.post(
+            "/api/accounts/import-zip",
+            files={"sessions": ("s.zip", zip_bytes, "application/zip")},
+            data={"group_id": str(gid), "proxy_group_id": str(pg_id)},
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["proxy_assigned"], 1)
+        self.assertEqual(body["proxy_no_pool"], 1)
 
     def test_import_zip_places_account_in_chosen_group(self) -> None:
         # Selected group is what new accounts join — verify the membership

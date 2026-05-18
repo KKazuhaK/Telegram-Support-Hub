@@ -127,13 +127,31 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="importDialog" title="上传 session ZIP" width="480px">
+    <el-dialog v-model="importDialog" title="上传 session ZIP" width="520px">
       <el-form label-width="100px">
         <el-form-item label="目标分组" required>
           <el-select v-model="importGroupId" placeholder="必选 —— 新号会归入该分组"
                      style="width: 100%">
             <el-option v-for="g in groups" :key="g.id" :label="g.name" :value="g.id" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="自动分配代理">
+          <el-select v-model="importProxyGroupId" placeholder="不分配代理"
+                     clearable style="width: 100%"
+                     @change="loadProxyGroups">
+            <el-option v-for="g in proxyGroups" :key="g.id"
+                       :label="`${g.name}（${g.count || 0} 个代理）`" :value="g.id" />
+          </el-select>
+          <div class="muted" style="font-size:12px;">
+            选了 → 新号自动从该分组里轮询绑代理。已绑代理的老号不重绑。
+          </div>
+        </el-form-item>
+        <el-form-item v-if="importProxyGroupId" label="每代理上限">
+          <el-input-number v-model="importMaxPerProxy" :min="1" :max="50"
+                           controls-position="right" style="width: 100%" />
+          <div class="muted" style="font-size:12px;">
+            单个代理最多绑几个号。一般 3-5 个，避免一个 IP 出口流量过大被 TG 风控。
+          </div>
         </el-form-item>
         <el-form-item label="文件">
           <el-upload
@@ -421,6 +439,16 @@ function onStatusTabChange() {
 
 const importDialog = ref(false)
 const importGroupId = ref(null)
+const importProxyGroupId = ref(null)
+const importMaxPerProxy = ref(3)
+const proxyGroups = ref([])
+
+async function loadProxyGroups() {
+  try {
+    const { data } = await http.get('/proxy-groups')
+    proxyGroups.value = data || []
+  } catch (_) { /* toast already fired */ }
+}
 
 const limitsDialog = ref(false)
 const limitsTarget = ref(null)
@@ -455,7 +483,10 @@ async function openImportDialog() {
     const { data: g } = await http.get('/account-groups')
     groups.value = g
   }
+  if (!proxyGroups.value.length) await loadProxyGroups()
   importGroupId.value = null
+  importProxyGroupId.value = null
+  importMaxPerProxy.value = 3
   importDialog.value = true
 }
 
@@ -475,6 +506,12 @@ async function uploadZip({ file }) {
   const fd = new FormData()
   fd.append('sessions', file)
   fd.append('group_id', String(importGroupId.value))
+  if (importProxyGroupId.value) {
+    fd.append('proxy_group_id', String(importProxyGroupId.value))
+    if (importMaxPerProxy.value) {
+      fd.append('max_accounts_per_proxy', String(importMaxPerProxy.value))
+    }
+  }
   const { data } = await http.post('/accounts/import-zip', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
@@ -498,7 +535,14 @@ async function uploadZip({ file }) {
       { confirmButtonText: '知道了', dangerouslyUseHTMLString: true },
     )
   } else {
-    ElMessage.success(`导入 ${ok} 个`)
+    let msg = `导入 ${ok} 个`
+    if (importProxyGroupId.value) {
+      msg += `，已绑代理 ${data.proxy_assigned || 0} 个`
+      if (data.proxy_no_pool) {
+        msg += `（${data.proxy_no_pool} 个代理池已满未绑）`
+      }
+    }
+    ElMessage.success(msg)
   }
   importDialog.value = false
   await load()
