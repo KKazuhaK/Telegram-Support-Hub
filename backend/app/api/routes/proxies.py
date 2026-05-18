@@ -90,6 +90,91 @@ def update_proxy(proxy_id: int, payload: ProxyUpdate, db: DbSession, admin: Admi
     return to_dict(proxy)
 
 
+class ProxyBulkImport(BaseModel):
+    text: str
+    protocol: str = "socks5"
+    group_id: int | None = None
+
+
+def _parse_proxy_line(line: str) -> dict | None:
+    """Parse one `host:port[:user[:pass]]` line. Returns None for
+    malformed lines so the caller can collect them as 'skipped' rather
+    than aborting the whole batch."""
+    parts = [p.strip() for p in line.strip().split(":")]
+    if len(parts) < 2:
+        return None
+    host = parts[0]
+    if not host:
+        return None
+    try:
+        port = int(parts[1])
+    except (ValueError, TypeError):
+        return None
+    username = parts[2] if len(parts) >= 3 else None
+    password = parts[3] if len(parts) >= 4 else None
+    return {"host": host, "port": port, "username": username, "password": password}
+
+
+@router.post("/import-text")
+def import_proxies_text(
+    payload: ProxyBulkImport, db: DbSession, admin: AdminDep,
+) -> dict:
+    """Paste a batch of `host:port:user:pass` lines, create one
+    ProxyEndpoint per parsed line. Existing (host, port, username)
+    triples are skipped so re-importing the same list is idempotent."""
+    created: list[dict] = []
+    skipped: list[dict] = []
+    duplicated: list[str] = []
+    seen_in_batch: set[tuple] = set()
+    for raw in payload.text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parsed = _parse_proxy_line(line)
+        if not parsed:
+            skipped.append({"line": line, "reason": "格式错误，期望 host:port 或 host:port:user:pass"})
+            continue
+        key = (parsed["host"], parsed["port"], parsed["username"] or "")
+        if key in seen_in_batch:
+            duplicated.append(line)
+            continue
+        seen_in_batch.add(key)
+        # Persistent dedup against existing rows.
+        existing_q = select(ProxyEndpoint).where(
+            ProxyEndpoint.host == parsed["host"],
+            ProxyEndpoint.port == parsed["port"],
+        )
+        if parsed["username"]:
+            existing_q = existing_q.where(ProxyEndpoint.username == parsed["username"])
+        else:
+            existing_q = existing_q.where(ProxyEndpoint.username.is_(None))
+        if db.scalar(existing_q):
+            duplicated.append(line)
+            continue
+        proxy = ProxyEndpoint(
+            name=f"{parsed['host']}:{parsed['port']}",
+            protocol=payload.protocol,
+            host=parsed["host"],
+            port=parsed["port"],
+            username=parsed["username"],
+            password_encrypted=encrypt_secret(parsed["password"]),
+            group_id=payload.group_id,
+        )
+        db.add(proxy)
+        db.flush()
+        created.append(to_dict(proxy))
+    write_audit(db, actor=admin, action="proxy.import_text",
+                target_type="proxy",
+                detail={"created": len(created), "duplicated": len(duplicated),
+                        "skipped": len(skipped), "protocol": payload.protocol})
+    db.commit()
+    return {
+        "created": created,
+        "duplicated_count": len(duplicated),
+        "skipped": skipped,
+    }
+
+
 @router.post("/{proxy_id}/check")
 def check_proxy(proxy_id: int, db: DbSession, _: AdminDep) -> dict:
     proxy = db.get(ProxyEndpoint, proxy_id)

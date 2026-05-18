@@ -181,5 +181,49 @@ class ProxyGroupsApiTestCase(unittest.TestCase):
         self.assertEqual(listing[0]["count"], 2)
 
 
+    def test_import_text_parses_host_port_user_pass(self) -> None:
+        text = (
+            "207.228.46.141:1337:user1:pw1\n"
+            "107.180.175.124:1337:user1:pw1\n"
+            "\n"  # blank line skipped
+            "10.0.0.1:8080\n"  # 2-field form
+            "garbage\n"  # malformed
+            "207.228.46.141:1337:user1:pw1\n"  # dup within batch
+        )
+        r = self.client.post(
+            "/api/proxies/import-text",
+            json={"text": text, "protocol": "socks5"},
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(len(body["created"]), 3)
+        self.assertEqual(body["duplicated_count"], 1)
+        self.assertEqual(len(body["skipped"]), 1)
+        self.assertIn("格式错误", body["skipped"][0]["reason"])
+        # Hosts saved correctly + 2-field row has null user/no creds.
+        with SessionLocal() as db:
+            rows = {p.host: p for p in db.query(ProxyEndpoint).all()}
+            self.assertEqual(rows["10.0.0.1"].port, 8080)
+            self.assertIsNone(rows["10.0.0.1"].username)
+            self.assertEqual(rows["207.228.46.141"].username, "user1")
+
+    def test_import_text_skips_existing_host_port_user(self) -> None:
+        # Re-importing the same list should be a no-op (idempotent).
+        text = "1.2.3.4:1080:u:p"
+        for _ in range(2):
+            r = self.client.post(
+                "/api/proxies/import-text",
+                json={"text": text},
+                headers=self.auth,
+            )
+            self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(len(body["created"]), 0)
+        self.assertEqual(body["duplicated_count"], 1)
+        with SessionLocal() as db:
+            self.assertEqual(db.query(ProxyEndpoint).count(), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

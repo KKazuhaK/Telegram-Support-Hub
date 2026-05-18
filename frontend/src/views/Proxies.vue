@@ -43,6 +43,7 @@
       <div class="right-pane">
         <div class="toolbar">
           <el-button type="primary" @click="openProxyDialog">+ 新增代理</el-button>
+          <el-button @click="openImportDialog">📋 批量导入</el-button>
           <el-button :loading="loading" @click="loadItems">刷新</el-button>
         </div>
         <el-table :data="items" v-loading="loading" stripe size="small">
@@ -135,6 +136,34 @@
       <el-button type="primary" :loading="savingProxy" @click="saveProxy">保存</el-button>
     </template>
   </el-dialog>
+
+  <el-dialog v-model="importDialog" title="批量导入代理" width="640px" top="6vh">
+    <el-form label-width="80px">
+      <el-form-item label="协议">
+        <el-radio-group v-model="importForm.protocol" size="small">
+          <el-radio value="socks5">SOCKS5</el-radio>
+          <el-radio value="socks4">SOCKS4</el-radio>
+          <el-radio value="http">HTTP</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item label="分组">
+        <el-select v-model="importForm.group_id" placeholder="不分组" clearable style="width: 100%">
+          <el-option v-for="g in groups" :key="g.id" :label="g.name" :value="g.id" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="代理列表">
+        <el-input v-model="importForm.text" type="textarea" :rows="10"
+                  placeholder="每行一条，支持 host:port 或 host:port:user:pass &#10;例如：&#10;207.228.46.141:1337:user:pass&#10;107.180.175.124:1337:user:pass" />
+        <div style="font-size:12px;color:#909399;margin-top:4px;line-height:1.5;">
+          已存在的代理（同 host + port + user）自动跳过。格式错误的行跳过并在结果里列出。
+        </div>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="importDialog = false">取消</el-button>
+      <el-button type="primary" :loading="importing" @click="doImport">导入</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -215,6 +244,48 @@ async function deleteGroup(g) {
   if (activeGroupId.value === g.id) activeGroupId.value = null
   await loadGroups()
   await loadItems()
+}
+
+const importDialog = ref(false)
+const importForm = reactive({ protocol: 'socks5', group_id: null, text: '' })
+const importing = ref(false)
+
+function openImportDialog() {
+  importForm.protocol = 'socks5'
+  importForm.group_id = activeGroupId.value && activeGroupId.value > 0
+    ? activeGroupId.value : null
+  importForm.text = ''
+  importDialog.value = true
+}
+
+async function doImport() {
+  if (!importForm.text.trim()) { ElMessage.warning('请粘贴代理列表'); return }
+  importing.value = true
+  try {
+    const { data } = await http.post('/proxies/import-text', {
+      text: importForm.text,
+      protocol: importForm.protocol,
+      group_id: importForm.group_id,
+    })
+    const created = data.created?.length || 0
+    const dup = data.duplicated_count || 0
+    const skipped = data.skipped?.length || 0
+    if (skipped > 0) {
+      // Show parse failures so the user can fix and re-paste.
+      const lines = data.skipped.slice(0, 10)
+        .map((s) => `  • ${s.line}（${s.reason}）`).join('\n')
+      const more = skipped > 10 ? `\n（还有 ${skipped - 10} 行）` : ''
+      ElMessage({
+        type: 'warning', duration: 8000,
+        message: `导入：新建 ${created}，重复跳过 ${dup}，格式错误 ${skipped}\n${lines}${more}`,
+      })
+    } else {
+      ElMessage.success(`导入：新建 ${created}，重复跳过 ${dup}`)
+    }
+    importDialog.value = false
+    await loadItems()
+    await loadGroups()
+  } finally { importing.value = false }
 }
 
 function openProxyDialog(row = null) {
