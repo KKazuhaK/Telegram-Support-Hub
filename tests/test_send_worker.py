@@ -193,6 +193,77 @@ class SendWorkerTestCase(unittest.TestCase):
             self.assertEqual(stored.status, "queued")
             self.assertIsNotNone(stored.next_run_at)
 
+    def test_value_error_fails_fast_no_retry(self) -> None:
+        # Phone-not-on-TG / privacy-hidden errors come back as ValueError
+        # from adapter.resolve_target. Retrying spends ImportContacts
+        # quota for nothing; should terminate on first attempt.
+        _, _, msg = _seed(self.db)
+
+        def fake_send(*_a, **_kw):
+            return TelegramSendResult(
+                ok=False, error_code="ValueError",
+                error_message="+18187654321 不是 Telegram 注册号",
+            )
+
+        with patch.object(send_tasks, "_send_via_adapter", side_effect=fake_send), \
+             patch.object(send_tasks, "account_send_lock", lambda aid, ttl: _NopLock()):
+            send_tasks.dispatch_send_queue(limit=10)
+
+        with SessionLocal() as db:
+            stored = db.get(MessageRecord, msg.id)
+            self.assertEqual(stored.status, "failed_permanent")
+            self.assertEqual(stored.attempt_count, 1)  # no further retries
+
+    def test_disabled_account_reroutes_to_sibling(self) -> None:
+        # When the originally-assigned account is disabled mid-campaign,
+        # the worker should hand the message to an alternate account in
+        # the same campaign's groups instead of marking it dead.
+        from backend.app.models.account import (
+            Account as Acc, AccountGroupMember as AGM,
+        )
+        account, campaign, msg = _seed(self.db)
+        with SessionLocal() as db:
+            # Pin the campaign to the seeded group and disable the
+            # originally-assigned account; add a second sibling account
+            # that should pick up the redirect.
+            cmp = db.get(Campaign, campaign.id)
+            grp = db.query(AccountGroup).first()
+            cmp.account_group_ids = [grp.id]
+            old_acc = db.get(Acc, account.id)
+            old_acc.enabled = False
+            old_acc.status = "limited"
+            new_acc = Acc(tg_user_id="alt", session_path="/tmp/alt.session",
+                          status="active", enabled=True, daily_limit=10)
+            db.add(new_acc); db.flush()
+            db.add(AGM(account_id=new_acc.id, group_id=grp.id))
+            db.commit()
+            new_acc_id = new_acc.id
+
+        # First tick: account #old is disabled → message reroutes to alt.
+        send_tasks.dispatch_send_queue(limit=10)
+        with SessionLocal() as db:
+            stored = db.get(MessageRecord, msg.id)
+            self.assertEqual(stored.account_id, new_acc_id)
+            self.assertEqual(stored.status, "queued")  # ready for next tick
+
+    def test_disabled_account_with_no_alternate_falls_back(self) -> None:
+        # When no sibling account is available, the message still
+        # terminates with account_unavailable instead of looping.
+        from backend.app.models.account import Account as Acc
+        account, campaign, msg = _seed(self.db)
+        with SessionLocal() as db:
+            cmp = db.get(Campaign, campaign.id)
+            grp = db.query(AccountGroup).first()
+            cmp.account_group_ids = [grp.id]
+            db.get(Acc, account.id).enabled = False
+            db.commit()
+
+        send_tasks.dispatch_send_queue(limit=10)
+        with SessionLocal() as db:
+            stored = db.get(MessageRecord, msg.id)
+            self.assertEqual(stored.status, "failed")
+            self.assertEqual(stored.error_code, "account_unavailable")
+
     def test_peer_flood_error_kills_account_immediately(self) -> None:
         # Telegram's anti-spam flag. Continued sends escalate toward a
         # permaban, so the account must be disabled on the spot — no

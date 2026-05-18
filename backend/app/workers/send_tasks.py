@@ -44,6 +44,47 @@ def _resolve_target(message: MessageRecord) -> str | None:
     return message.target_tg_user_id or message.phone
 
 
+def _find_alternate_account(
+    db, campaign: Campaign, exclude_account_id: int | None,
+) -> Account | None:
+    """Pick another eligible account from the campaign's groups, or
+    None. Used to reroute messages off an account that got disabled
+    mid-campaign (e.g. PeerFloodError auto-kill) so a single bad
+    account doesn't bury half the campaign as 'account_unavailable'.
+    Prefers the least-loaded account so a wave of redirects doesn't
+    pile up on one survivor."""
+    group_ids = campaign.account_group_ids or []
+    if not group_ids:
+        return None
+    member_subq = select(AccountGroupMember.account_id).where(
+        AccountGroupMember.group_id.in_(group_ids)
+    )
+    return db.scalar(
+        select(Account)
+        .where(Account.enabled.is_(True))
+        .where(Account.status.in_(["active", "imported"]))
+        .where(Account.id.in_(member_subq))
+        .where(Account.id != exclude_account_id)
+        .order_by(Account.sent_today.asc(), Account.id.asc())
+        .limit(1)
+    )
+
+
+# Send errors that won't resolve through retry. Wasting attempts on
+# these costs the sending account ImportContacts / search quota — TG
+# will flood-wait us for trying. ValueError is what adapter.send_message
+# raises when our import-contact fallback can't resolve the phone
+# (number not on TG or privacy-hidden).
+FAIL_FAST_ERROR_CODES = {
+    "ValueError",
+    "PhoneNotOccupiedError",
+    "UsernameInvalidError",
+    "UsernameNotOccupiedError",
+    "PhoneNumberInvalidError",
+    "PhoneNumberBannedError",
+}
+
+
 def _send_via_adapter(
     account: Account, proxy: ProxyEndpoint | None,
     target: str, body: str, entities: list | None = None,
@@ -94,6 +135,16 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
 
             account = db.get(Account, message.account_id) if message.account_id else None
             if not account or not account.enabled or account.status not in {"active", "imported"}:
+                # Account got disabled mid-campaign (e.g. PeerFlood auto-
+                # kill) — before declaring this message dead, try to
+                # reroute it to a sibling account in the same campaign's
+                # groups. Next tick picks it up with the new account_id.
+                alt = _find_alternate_account(db, campaign, message.account_id)
+                if alt:
+                    message.account_id = alt.id
+                    message.error_code = None
+                    message.error_message = None
+                    continue
                 message.status = "failed"
                 message.error_code = "account_unavailable"
                 message.error_message = "no active account assigned"
@@ -215,6 +266,14 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
                             f"{result.error_code}: {result.error_message or ''} "
                             f"(auto-disabled by send_worker)"
                         )[:500]
+                        message.status = "failed_permanent"
+                        campaign.failed_count += 1
+                        failed += 1
+                    elif result.error_code in FAIL_FAST_ERROR_CODES:
+                        # No-recover errors: target isn't on TG / phone
+                        # invalid / username taken back / etc. Retrying
+                        # burns ImportContacts/search quota for nothing
+                        # and risks our own account hitting a flood-wait.
                         message.status = "failed_permanent"
                         campaign.failed_count += 1
                         failed += 1
