@@ -506,12 +506,32 @@ def batch_delete_accounts(payload: AccountBatchDelete = Body(...), *, db: DbSess
     rows = list(db.scalars(select(Account).where(Account.id.in_(payload.ids))))
     if not rows:
         return {"deleted": 0}
-    db.execute(sa_delete(AccountGroupMember).where(AccountGroupMember.account_id.in_(payload.ids)))
+    # Five tables FK into accounts.id with no cascade — every one will
+    # raise IntegrityError on delete unless we clear refs first.
+    # Nullable cols (Customer.assigned_account_id, MessageRecord.account_id)
+    # get set NULL to preserve history. NOT NULL cols (Friend.account_id,
+    # AccountProxyLog.account_id) get their rows deleted — they have no
+    # meaning without an account.
+    from backend.app.models.customer import Customer, Friend
+    from backend.app.models.message import MessageRecord
+    from backend.app.models.proxy import AccountProxyLog
+    ids = payload.ids
+    db.query(Customer).filter(
+        Customer.assigned_account_id.in_(ids)
+    ).update({"assigned_account_id": None}, synchronize_session=False)
+    db.query(MessageRecord).filter(
+        MessageRecord.account_id.in_(ids)
+    ).update({"account_id": None}, synchronize_session=False)
+    db.query(Friend).filter(Friend.account_id.in_(ids)).delete(synchronize_session=False)
+    db.query(AccountProxyLog).filter(
+        AccountProxyLog.account_id.in_(ids)
+    ).delete(synchronize_session=False)
+    db.execute(sa_delete(AccountGroupMember).where(AccountGroupMember.account_id.in_(ids)))
     for acc in rows:
         db.delete(acc)
     write_audit(
         db, actor=admin, action="account.batch_delete",
-        detail={"ids": payload.ids, "count": len(rows)},
+        detail={"ids": ids, "count": len(rows)},
     )
     db.commit()
     return {"deleted": len(rows)}

@@ -150,6 +150,41 @@ class AccountsBatchApiTestCase(unittest.TestCase):
                 0,
             )
 
+    def test_batch_delete_handles_all_fk_dependencies(self) -> None:
+        # All five FK-into-accounts tables blocked the delete before
+        # this fix. Seed every kind of reference, then confirm the
+        # delete still goes through and history-preserving columns
+        # land NULL while NOT-NULL dependents are pruned.
+        from backend.app.models.customer import Customer, Friend
+        from backend.app.models.message import MessageRecord
+        from backend.app.models.proxy import AccountProxyLog
+        ids = self._ids()[:1]
+        aid = ids[0]
+        with SessionLocal() as db:
+            db.add(Customer(phone="+90000001", consent=True, assigned_account_id=aid))
+            db.add(MessageRecord(account_id=aid, body_snapshot="x",
+                                 direction="outbound", status="sent"))
+            db.add(Friend(account_id=aid, tg_user_id="f1", status="new"))
+            db.add(AccountProxyLog(account_id=aid, action="bind", reason="test"))
+            db.commit()
+
+        resp = self.client.request(
+            "DELETE", "/api/accounts/batch",
+            json={"ids": ids}, headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["deleted"], 1)
+        with SessionLocal() as db:
+            self.assertIsNone(db.get(Account, aid))
+            # Nullable refs preserved with NULL.
+            cust = db.query(Customer).one()
+            self.assertIsNone(cust.assigned_account_id)
+            msg = db.query(MessageRecord).one()
+            self.assertIsNone(msg.account_id)
+            # NOT NULL dependents pruned.
+            self.assertEqual(db.query(Friend).count(), 0)
+            self.assertEqual(db.query(AccountProxyLog).count(), 0)
+
     def test_batch_bind_proxy(self) -> None:
         ids = self._ids()[:2]
         with SessionLocal() as db:
