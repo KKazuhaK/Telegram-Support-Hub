@@ -554,6 +554,15 @@ async function toggleEnabled(row, enabled) {
 }
 
 async function batchEnabled(enabled) {
+  // Confirm to avoid an accidental click on a 100-row selection
+  // silently flipping every account offline.
+  try {
+    await ElMessageBox.confirm(
+      `${enabled ? '上线' : '下线'} ${selectedIds.value.length} 个账号？`,
+      enabled ? '批量上线' : '批量下线',
+      { type: enabled ? 'info' : 'warning' },
+    )
+  } catch (_) { return }
   await http.post('/accounts/batch', { ids: selectedIds.value, enabled })
   ElMessage.success(`已${enabled ? '上线' : '下线'} ${selectedIds.value.length} 个账号`)
   tableRef.value?.clearSelection?.()
@@ -561,6 +570,12 @@ async function batchEnabled(enabled) {
 }
 
 async function batchStatus(status) {
+  try {
+    await ElMessageBox.confirm(
+      `把 ${selectedIds.value.length} 个账号设为「${statusLabel(status)}」？`,
+      '批量改状态', { type: 'warning' },
+    )
+  } catch (_) { return }
   await http.post('/accounts/batch', { ids: selectedIds.value, status })
   ElMessage.success(`已设为「${statusLabel(status)}」 ${selectedIds.value.length} 个账号`)
   tableRef.value?.clearSelection?.()

@@ -208,7 +208,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '@/api/http'
 
 const groups = ref([])
@@ -312,6 +312,15 @@ async function batchCheck() {
 }
 
 async function batchSetStatus(status) {
+  // Confirm — same reason as accounts.batchEnabled: misclick on a
+  // 100-row selection silently disables every proxy.
+  try {
+    await ElMessageBox.confirm(
+      `${status === 'active' ? '启用' : '禁用'} ${selectedIds.value.length} 个代理？`,
+      status === 'active' ? '批量启用' : '批量禁用',
+      { type: status === 'active' ? 'info' : 'warning' },
+    )
+  } catch (_) { return }
   batchSaving.value = true
   try {
     await http.post('/proxies/batch', { ids: selectedIds.value, status })

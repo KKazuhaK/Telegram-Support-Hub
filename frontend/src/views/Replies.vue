@@ -500,6 +500,19 @@ async function selectOrphan(t) {
   if (t.account_id) sendAccountId.value = t.account_id
 }
 
+function _revokeAllImageBlobs() {
+  // Image attachments are lazy-loaded as blob URLs via ensureImage()
+  // and cached on m._imgUrl. Without revoking these on history
+  // replacement / unmount, every chat switch leaks up to 10MB per
+  // image per row. Call this before replacing history.value.
+  for (const m of history.value) {
+    if (m._imgUrl) {
+      try { URL.revokeObjectURL(m._imgUrl) } catch (_) {}
+      m._imgUrl = ''
+    }
+  }
+}
+
 async function loadHistoryForCurrent() {
   if (!selected.value) return
   historyLoading.value = true
@@ -515,6 +528,7 @@ async function loadHistoryForCurrent() {
       const r = await http.get('/orphan-threads/messages', { params })
       data = r.data
     }
+    _revokeAllImageBlobs()
     history.value = (data || []).map((m) => ({
       ...m, _translating: false, _collapsed: false,
     }))
@@ -748,6 +762,10 @@ function ensureImage(m) {
   // through the auth'd /api endpoint into a blob URL cached on the row.
   // Returns nothing so {{ ensureImage(m) }} renders empty.
   if (m._imgUrl || m._imgFetching) return
+  // The customer-attachment route is only valid for customer threads;
+  // orphan messages have no customer_id so the request 404s and toasts
+  // an error. Skip silently for orphans — they show '[图片]' placeholder.
+  if (selected.value?.kind !== 'customer') return
   m._imgFetching = true
   const cid = selected.value?.id
   http.get(`/customers/${cid}/messages/${m.id}/attachment`, { responseType: 'blob' })
@@ -789,6 +807,10 @@ async function onPickImage(e) {
     await nextTick()
     scrollToBottom()
     selected.value.last_message_at = data.created_at
+    // Also bump the row inside customers.value — selected is a clone,
+    // so mutating it doesn't reflect into the sidebar list.
+    const _row = customers.value.find((c) => c.id === selected.value.id)
+    if (_row) _row.last_message_at = data.created_at
     customers.value = customers.value.slice().sort((a, b) => {
       const ta = (a.last_reply_at || a.last_message_at || '')
       const tb = (b.last_reply_at || b.last_message_at || '')
@@ -827,6 +849,10 @@ async function send() {
     scrollToBottom()
     // Bump the customer to the top of the sidebar.
     selected.value.last_message_at = data.created_at
+    // Also bump the row inside customers.value — selected is a clone,
+    // so mutating it doesn't reflect into the sidebar list.
+    const _row = customers.value.find((c) => c.id === selected.value.id)
+    if (_row) _row.last_message_at = data.created_at
     customers.value = customers.value.slice().sort((a, b) => {
       const ta = (a.last_reply_at || a.last_message_at || '')
       const tb = (b.last_reply_at || b.last_message_at || '')
@@ -938,7 +964,11 @@ onMounted(() => {
   loadAccounts()
   connect()
 })
-onBeforeUnmount(() => { stopped = true; tearDownWs() })
+onBeforeUnmount(() => {
+  stopped = true
+  tearDownWs()
+  _revokeAllImageBlobs()
+})
 </script>
 
 <style scoped>

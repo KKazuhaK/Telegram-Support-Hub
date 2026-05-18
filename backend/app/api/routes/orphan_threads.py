@@ -128,6 +128,7 @@ def list_orphan_threads(db: DbSession, _: AdminDep, limit: int = 200) -> list[di
             MessageRecord.target_tg_user_id,
             MessageRecord.phone,
             func.max(MessageRecord.sent_at).label("last_at"),
+            func.max(MessageRecord.id).label("last_id"),
             func.count(MessageRecord.id).label("msg_count"),
         )
         .where(
@@ -144,28 +145,27 @@ def list_orphan_threads(db: DbSession, _: AdminDep, limit: int = 200) -> list[di
         .subquery()
     )
     rows = list(db.execute(select(aggregated)).all())
-    # Fetch the latest message text per group (simpler than window funcs).
+    if not rows:
+        return []
+    # Single round-trip for the latest body_snapshot per group via a
+    # MAX(id) join — was 1+N before (one COUNT/MAX query, then one
+    # SELECT per group).
+    last_ids = [int(r.last_id) for r in rows if r.last_id is not None]
+    snippets: dict[int, str] = {}
+    if last_ids:
+        for m in db.scalars(
+            select(MessageRecord).where(MessageRecord.id.in_(last_ids))
+        ):
+            snippets[m.id] = (m.body_snapshot or "")[:200]
     out: list[dict] = []
     for r in rows:
-        latest = db.scalar(
-            select(MessageRecord)
-            .where(
-                MessageRecord.direction == "inbound",
-                MessageRecord.customer_id.is_(None),
-                MessageRecord.account_id == r.account_id,
-                MessageRecord.target_tg_user_id == r.target_tg_user_id,
-                MessageRecord.phone == r.phone,
-            )
-            .order_by(MessageRecord.id.desc())
-            .limit(1)
-        )
         out.append({
             "account_id": r.account_id,
             "target_tg_user_id": r.target_tg_user_id,
             "phone": r.phone,
             "last_at": r.last_at,
             "msg_count": int(r.msg_count or 0),
-            "last_snippet": (latest.body_snapshot or "")[:200] if latest else "",
+            "last_snippet": snippets.get(int(r.last_id)) if r.last_id is not None else "",
         })
     return out
 
