@@ -430,6 +430,82 @@ class ImportZipFlatLayoutTestCase(unittest.TestCase):
         self.assertEqual(body["proxy_assigned"], 1)
         self.assertEqual(body["proxy_no_pool"], 1)
 
+    def test_import_zip_applies_daily_and_hourly_limits(self) -> None:
+        # Operator can dial down the per-account send caps at import time
+        # — useful for a fresh batch that hasn't been warmed up. Defaults
+        # (20/day, unlimited hourly) are too aggressive for unaged numbers
+        # and led to FloodError on contacts.importContacts in the field.
+        gid = _make_group("limits")
+        zip_bytes = _make_zip({
+            "1001.session": b"x",
+            "1002.session": b"x",
+        })
+        r = self.client.post(
+            "/api/accounts/import-zip",
+            files={"sessions": ("s.zip", zip_bytes, "application/zip")},
+            data={
+                "group_id": str(gid),
+                "daily_limit": "5",
+                "hourly_limit": "2",
+            },
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        with SessionLocal() as db:
+            for acc in db.query(Account).all():
+                self.assertEqual(acc.daily_limit, 5)
+                self.assertEqual(acc.hourly_limit, 2)
+
+    def test_import_zip_omitting_limits_keeps_model_defaults(self) -> None:
+        # When the operator skips the new fields, behavior is unchanged —
+        # accounts get the conservative model defaults (20/day, hourly=NULL).
+        gid = _make_group("default-limits")
+        zip_bytes = _make_zip({"2001.session": b"x"})
+        r = self.client.post(
+            "/api/accounts/import-zip",
+            files={"sessions": ("s.zip", zip_bytes, "application/zip")},
+            data={"group_id": str(gid)},
+            headers=self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        with SessionLocal() as db:
+            acc = db.query(Account).one()
+            self.assertEqual(acc.daily_limit, 20)
+            self.assertIsNone(acc.hourly_limit)
+
+    def test_import_zip_reimport_does_not_overwrite_tuned_limits(self) -> None:
+        # Re-importing an existing account must not clobber limits an
+        # operator has hand-tuned on the dashboard. The endpoint already
+        # leaves daily_limit alone on re-import — explicit regression test
+        # so we don't lose this property by accident.
+        from sqlalchemy import select as _select
+        gid = _make_group("reimport-limits")
+        zip_bytes = _make_zip({"3001.session": b"x"})
+        # First import with elevated limits.
+        self.client.post(
+            "/api/accounts/import-zip",
+            files={"sessions": ("s.zip", zip_bytes, "application/zip")},
+            data={"group_id": str(gid), "daily_limit": "50", "hourly_limit": "8"},
+            headers=self.auth,
+        )
+        # Operator hand-tunes down via the dashboard.
+        with SessionLocal() as db:
+            acc = db.scalar(_select(Account).where(Account.tg_user_id == "3001"))
+            acc.daily_limit = 30
+            acc.hourly_limit = 4
+            db.commit()
+        # Second import (different limits in form). Must leave tuned values alone.
+        self.client.post(
+            "/api/accounts/import-zip",
+            files={"sessions": ("s.zip", zip_bytes, "application/zip")},
+            data={"group_id": str(gid), "daily_limit": "999", "hourly_limit": "999"},
+            headers=self.auth,
+        )
+        with SessionLocal() as db:
+            acc = db.scalar(_select(Account).where(Account.tg_user_id == "3001"))
+            self.assertEqual(acc.daily_limit, 30)
+            self.assertEqual(acc.hourly_limit, 4)
+
     def test_import_zip_places_account_in_chosen_group(self) -> None:
         # Selected group is what new accounts join — verify the membership
         # row points at it (not the legacy `未分组` default).

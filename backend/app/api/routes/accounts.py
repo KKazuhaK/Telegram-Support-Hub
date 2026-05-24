@@ -257,6 +257,8 @@ async def import_zip(
     group_id: int = Form(...),
     proxy_group_id: int | None = Form(None),
     max_accounts_per_proxy: int | None = Form(None),
+    daily_limit: int | None = Form(None),
+    hourly_limit: int | None = Form(None),
 ) -> dict:
     if not sessions.filename or not sessions.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="请上传 .zip 后缀的 session 压缩包")
@@ -271,6 +273,23 @@ async def import_zip(
             status_code=400,
             detail=f"账号分组 #{group_id} 不存在，请先在「账号分组」页创建",
         )
+
+    # Optional per-account caps for this batch. Applied to NEW accounts
+    # only — re-imports of existing accounts preserve whatever the
+    # operator hand-tuned via 账号管理. Out-of-range values are rejected
+    # outright (PATCH /accounts/{id} treats 0 as "uncapped" for hourly,
+    # so we mirror that: hourly_limit=0 → store NULL).
+    if daily_limit is not None and (daily_limit < 1 or daily_limit > 500):
+        raise HTTPException(
+            status_code=400, detail="daily_limit 必须在 1-500 之间",
+        )
+    if hourly_limit is not None and (hourly_limit < 0 or hourly_limit > 200):
+        raise HTTPException(
+            status_code=400, detail="hourly_limit 必须在 0-200 之间（0 = 不限）",
+        )
+    hourly_limit_normalized = (
+        None if hourly_limit in (None, 0) else hourly_limit
+    )
 
     # Bounded upload: a session zip is ~tens of KB per account, so 64MB
     # comfortably covers a 1000-account batch. Caps protect the API from
@@ -324,10 +343,17 @@ async def import_zip(
             account = db.scalar(select(Account).where(Account.phone == phone))
         is_new = account is None
         if not account:
-            account = Account(
+            new_account_kwargs: dict = dict(
                 tg_user_id=tg_user_id, session_path=str(session_path),
                 status="imported", phone=phone,
             )
+            if daily_limit is not None:
+                new_account_kwargs["daily_limit"] = daily_limit
+            if hourly_limit is not None:
+                # 0 in == NULL in DB (uncapped). Stays out of the dict
+                # entirely otherwise, so the model default (None) stands.
+                new_account_kwargs["hourly_limit"] = hourly_limit_normalized
+            account = Account(**new_account_kwargs)
             db.add(account)
             db.flush()
             db.add(AccountGroupMember(

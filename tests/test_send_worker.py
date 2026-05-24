@@ -290,6 +290,33 @@ class SendWorkerTestCase(unittest.TestCase):
             self.assertEqual(acc.status, "limited")
             self.assertIn("PeerFloodError", acc.last_error or "")
 
+    def test_flood_error_from_import_path_kills_account(self) -> None:
+        # FloodError is Telethon's base flood class; it surfaces from
+        # ImportContactsRequest when TG's anti-spam doesn't pick a more
+        # specific subclass (operator hit this in the field — tooltip
+        # showed "(FloodError)"). Without the kill-switch, the account
+        # stays enabled and the next campaign reuses it → same wall.
+        _, _, msg = _seed(self.db)
+
+        def fake_send(*_a, **_kw):
+            return TelegramSendResult(
+                ok=False, error_code="FloodError",
+                error_message="无法解析 +1xxx：导入联系人失败（FloodError）",
+            )
+
+        with patch.object(send_tasks, "_send_via_adapter", side_effect=fake_send), \
+             patch.object(send_tasks, "account_send_lock", lambda aid, ttl: _NopLock()):
+            send_tasks.dispatch_send_queue(limit=10)
+
+        with SessionLocal() as db:
+            stored = db.get(MessageRecord, msg.id)
+            self.assertEqual(stored.status, "failed_permanent")
+            self.assertEqual(stored.attempt_count, 1)
+            acc = db.query(Account).first()
+            self.assertFalse(acc.enabled)
+            self.assertEqual(acc.status, "limited")
+            self.assertIn("FloodError", acc.last_error or "")
+
     def test_campaign_with_only_failures_transitions_to_failed(self) -> None:
         # All-failure broadcast must end in 'failed', not 'partially_failed'
         # — the latter implied at least one success, which is misleading.

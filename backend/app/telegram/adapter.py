@@ -52,6 +52,22 @@ class OperationResult:
     error_message: str | None = None
 
 
+class ResolveTargetError(ValueError):
+    """resolve_target() failed to look up a target via contacts.importContacts.
+
+    Subclasses ValueError so existing FAIL_FAST_ERROR_CODES handling (which
+    treats ValueError as terminal — retrying burns more import quota) keeps
+    working. `inner_code` carries the original Telethon exception class name
+    (e.g. "PeerFloodError", "FloodError", "FloodWaitError") so the worker
+    can apply ACCOUNT_KILL_CODES instead of seeing only "ValueError" and
+    leaving a flood-blocked account enabled for the next campaign to reuse.
+    """
+
+    def __init__(self, message: str, inner_code: str | None = None) -> None:
+        super().__init__(message)
+        self.inner_code = inner_code
+
+
 def _classify_telethon_error(exc: BaseException) -> OperationResult:
     """Map a raised Telethon (or other) exception to a stable error_code +
     Chinese-friendly error_message. Stable codes let the worker decide
@@ -341,8 +357,9 @@ class TelegramAdapter:
         try:
             result = await client(ImportContactsRequest([contact]))
         except Exception as exc:
-            raise ValueError(
-                f"无法解析 {target}：导入联系人失败（{type(exc).__name__}）"
+            raise ResolveTargetError(
+                f"无法解析 {target}：导入联系人失败（{type(exc).__name__}）",
+                inner_code=type(exc).__name__,
             ) from exc
         if not result.users:
             raise ValueError(
@@ -400,6 +417,11 @@ class TelegramAdapter:
                     ok=False, error_code="flood_wait",
                     error_message=f"flood wait {getattr(exc, 'seconds', '?')}s",
                 )
+            # resolve_target wraps Telethon flood/peer-flood as ResolveTargetError;
+            # surface the inner class name so the worker's ACCOUNT_KILL_CODES
+            # match instead of seeing a generic "ValueError".
+            if isinstance(exc, ResolveTargetError) and exc.inner_code:
+                code = exc.inner_code
             logger.exception("send_file failed for account %s -> %s", account.id, target)
             return TelegramSendResult(ok=False, error_code=code, error_message=str(exc))
         finally:
@@ -463,6 +485,11 @@ class TelegramAdapter:
                     error_code="flood_wait",
                     error_message=f"flood wait {getattr(exc, 'seconds', '?')}s",
                 )
+            # resolve_target wraps Telethon flood/peer-flood as ResolveTargetError;
+            # surface the inner class name so the worker's ACCOUNT_KILL_CODES
+            # match instead of seeing a generic "ValueError".
+            if isinstance(exc, ResolveTargetError) and exc.inner_code:
+                code = exc.inner_code
             logger.exception("send_message failed for account %s -> %s", account.id, target)
             return TelegramSendResult(ok=False, error_code=code, error_message=str(exc))
         finally:

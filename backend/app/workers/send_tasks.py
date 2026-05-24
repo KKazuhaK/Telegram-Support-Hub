@@ -273,12 +273,18 @@ def dispatch_send_queue(limit: int | None = None) -> dict:
                     # Account-level kill-switches: PeerFloodError means
                     # Telegram has flagged this account as a spammer —
                     # retrying just escalates toward a permaban. Same
-                    # for UserDeactivated (account terminated). Disable
-                    # the account immediately so the supervisor stops
-                    # feeding it new messages, and mark this message as
-                    # terminal (no retry).
+                    # for UserDeactivated (account terminated). FloodError
+                    # is Telethon's generic flood base class; it surfaces
+                    # from contacts.importContacts when TG's anti-spam
+                    # doesn't pick a more specific subclass, and means
+                    # this account is currently blocked from phone-number
+                    # lookups — every additional attempt deepens the hole.
+                    # Disable the account immediately so the supervisor
+                    # stops feeding it new messages, and mark this message
+                    # as terminal (no retry).
                     ACCOUNT_KILL_CODES = {
                         "PeerFloodError",
+                        "FloodError",
                         "UserDeactivatedError",
                         "UserDeactivatedBanError",
                     }

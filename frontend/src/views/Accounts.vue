@@ -153,6 +153,22 @@
             单个代理最多绑几个号。一般 3-5 个，避免一个 IP 出口流量过大被 TG 风控。
           </div>
         </el-form-item>
+        <el-form-item label="日上限/号">
+          <el-input-number v-model="importDailyLimit" :min="1" :max="500"
+                           controls-position="right" style="width: 100%"
+                           placeholder="留空 = 默认 20" />
+          <div class="muted" style="font-size:12px;">
+            新号每日群发上限（条/号）。留空使用默认 20。未养的号建议 5-10，养过的可拉到 60-100。
+          </div>
+        </el-form-item>
+        <el-form-item label="时上限/号">
+          <el-input-number v-model="importHourlyLimit" :min="0" :max="200"
+                           controls-position="right" style="width: 100%"
+                           placeholder="留空 / 0 = 不限" />
+          <div class="muted" style="font-size:12px;">
+            可选。每小时群发上限。留空 / 0 = 不限。建议新号 2-5 防止短时间集中发送触发 FloodError。
+          </div>
+        </el-form-item>
         <el-form-item label="文件">
           <el-upload
             :http-request="uploadZip"
@@ -441,6 +457,10 @@ const importDialog = ref(false)
 const importGroupId = ref(null)
 const importProxyGroupId = ref(null)
 const importMaxPerProxy = ref(3)
+// Per-account caps applied to NEW accounts in this batch. null = use
+// the model default (daily_limit=20, hourly_limit=NULL/uncapped).
+const importDailyLimit = ref(null)
+const importHourlyLimit = ref(null)
 const proxyGroups = ref([])
 
 async function loadProxyGroups() {
@@ -487,6 +507,8 @@ async function openImportDialog() {
   importGroupId.value = null
   importProxyGroupId.value = null
   importMaxPerProxy.value = 3
+  importDailyLimit.value = null
+  importHourlyLimit.value = null
   importDialog.value = true
 }
 
@@ -511,6 +533,14 @@ async function uploadZip({ file }) {
     if (importMaxPerProxy.value) {
       fd.append('max_accounts_per_proxy', String(importMaxPerProxy.value))
     }
+  }
+  // Only send the cap fields when the operator explicitly entered a
+  // value; an omitted form field tells the backend to keep model defaults.
+  if (importDailyLimit.value != null && importDailyLimit.value !== '') {
+    fd.append('daily_limit', String(importDailyLimit.value))
+  }
+  if (importHourlyLimit.value != null && importHourlyLimit.value !== '') {
+    fd.append('hourly_limit', String(importHourlyLimit.value))
   }
   const { data } = await http.post('/accounts/import-zip', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
